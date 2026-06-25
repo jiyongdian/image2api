@@ -63,50 +63,39 @@ It's more than an API proxy: it ships with **credit billing, CDK top-ups, referr
 
 ## 🚀 Features
 
-<table>
-<tr>
-<td width="50%" valign="top">
-
-### 🎨 Generation
+#### 🎨 Generation
 - Images + videos in one place, with **image-to-image / reference frames** (first frame, last frame, style reference)
 - Multiple resolutions (1K / 2K / 4K), aspect ratios and video durations — configured and priced per model
 - 6 providers, 10+ models, **enable / disable / re-price from the admin console**, no code changes
 
-### 🔌 OpenAI Compatible
+#### 🔌 OpenAI Compatible
 - Text-to-image `/v1/images/generations` · image-to-image `/v1/images/edits` (multipart ref upload) · video `/v1/videos` (Sora-style async: create → poll → `/content`) · `/v1/models`
 - **Strict OpenAI params**: `size` sets the aspect ratio, `quality` the resolution tier — just swap `base_url` + `api_key` into an existing OpenAI SDK
 - Image results returned **inline as base64** — nothing stored server-side, privacy-friendly
 
-### 🔁 Account Pools + Smart Failover
+#### 🔁 Account Pools + Smart Failover
 - Round-robin scheduling across the pool; one bad account doesn't break the whole
 - **Out of quota → switch** · **auth expired → refresh & retry / kill** · **transient → retry same account ×3** · **bad params → fail fast**
 - **Pre-deducted credits**: atomic debit before generation, auto-refunded on failure, no over-spend under concurrency
 
-</td>
-<td width="50%" valign="top">
-
-### 🔐 Automatic Token Keep-alive
+#### 🔐 Automatic Token Keep-alive
 - Single-use rotating tokens (Krea / Imagine) are **renewed proactively 10 minutes before expiry**; new tokens persisted automatically
 - Adobe cookies exchanged for fresh tokens on a schedule; bare JWTs killed on expiry
 - Daily quota recovered at each provider's reset time, then re-probed for the real balance
 
-### 💳 Billing & Operations
+#### 💳 Billing & Operations
 - Credit-based (**pre-deduct + refund on failure**), priced per model / resolution / duration
 - **Agent pricing**: a user can be set as an "agent" role and models can carry agent prices; agent users (including their API key calls) are billed at the agent price, falling back to the normal price when unset
 - **CDK redeem codes** · **referral rewards** · email sign-up / verification code / password reset
 - Three roles: regular user / agent / admin (single)
 
-### 🖥️ User Frontend (Vue 3)
+#### 🖥️ User Frontend (Vue 3)
 - Playground · creations gallery · generation logs (with failure reasons / source tags)
 - API docs · API key management · referral · about, light / dark theme
 
-### 🛠️ Admin Console
+#### 🛠️ Admin Console
 - Overview dashboard (trends / DAU / top failures / top spenders)
 - Model management (normal + agent price) · account management (bulk import / dedup / quota) · site-wide logs · user management (set as agent) · CDK · showcase · site config
-
-</td>
-</tr>
-</table>
 
 **🧰 Engineering highlights**: tls-client (Chrome JA3/JA4 fingerprint) reliably passes Cloudflare · media stored in S3/RustFS, served through an authenticated proxy with retention cleanup · self-healing maintenance loop (quota recovery / credential refresh / orphan-job cleanup with refunds) · one-command Docker deploy with acme.sh auto HTTPS.
 
