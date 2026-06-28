@@ -290,29 +290,29 @@ func parseCreditsConfig(buf []byte) (remaining int, resetUnix string, ok bool) {
 	return 0, "", false
 }
 
-func scanConfigMessage(msg []byte) (remaining int, resetUnix string, ok bool) {
-	var remF float32
-	haveRem := false
+func scanConfigMessage(msg []byte) (used int, resetUnix string, ok bool) {
+	var usedF float32
+	seen := false
 	for len(msg) > 0 {
 		fn, wt, val, rest, good := readField(msg)
 		if !good {
 			break
 		}
 		msg = rest
+		seen = true
 		switch {
-		case fn == 1 && wt == 5: // float32 remaining credits
-			remF = float32FromLE(val)
-			haveRem = true
+		case fn == 1 && wt == 5: // float32 credits USED this period
+			usedF = float32FromLE(val)
 		case fn == 5 && wt == 2: // reset timestamp message { #1 varint=seconds }
 			if sec, sok := firstVarint(val); sok {
 				resetUnix = strconv.FormatInt(sec, 10)
 			}
 		}
 	}
-	if haveRem {
-		return int(remF), resetUnix, true
-	}
-	return 0, resetUnix, false
+	// A valid config message may OMIT field #1 when used == 0 (proto3 drops zero
+	// scalars) — a full-quota account. So as long as the message had any field,
+	// treat it as parsed with used defaulting to 0 (= 100 remaining).
+	return int(usedF), resetUnix, seen
 }
 
 // readField reads one protobuf field: returns (fieldNum, wireType, value, rest, ok).

@@ -3,12 +3,16 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { api, jsonBody } from '../api'
 import { fmtTs, fmtIso, fmtDate, fmtClock } from '../utils/format'
 import ImportModal from '../components/ImportModal.vue'
+import UpstreamModal from '../components/UpstreamModal.vue'
 import Icon from '../components/Icon.vue'
 
 const rows = ref([])
 const loading = ref(false)
 const quotaStatus = ref('')
 const showImport = ref(false)
+const showUpstream = ref(false)
+const editingUpstream = ref(null)
+function editUpstream(a) { editingUpstream.value = a; showUpstream.value = true }
 
 const typeFilter = ref('')      // '' | 'openai' | 'adobe' | 'runway' | 'leonardo'
 const statusFilter = ref('')    // '' | 'active' | 'quota' | 'disabled'
@@ -96,6 +100,13 @@ const pageNumbers = computed(() => {
 })
 
 let pendingTimer = null
+
+// Inline-edit an account field (weight / concurrency) → PATCH /tokens/{pool}/{id}.
+async function saveField(row, field, value) {
+  const v = Number(value)
+  if (Number.isNaN(v)) return
+  await api(`/tokens/${row.pool}/${row.id}`, jsonBody('PATCH', { [field]: v }))
+}
 
 async function loadAccounts() {
   loading.value = true
@@ -361,10 +372,13 @@ onMounted(loadAccounts)
       <button @click="showImport = true" class="btn-primary">
         <Icon name="plus" class="w-3.5 h-3.5" /> 导入账号
       </button>
+      <button @click="editingUpstream = null; showUpstream = true" class="btn-soft">
+        <Icon name="plus" class="w-3.5 h-3.5" /> 添加上游
+      </button>
     </div>
 
     <!-- Table -->
-    <div class="card overflow-hidden">
+    <div class="card overflow-x-auto">
       <div v-if="loading && !rows.length" class="text-center text-sm text-white/40 py-20">加载中…</div>
       <div v-else-if="!filtered.length" class="flex flex-col items-center gap-3 text-white/40 py-20">
         <span class="w-14 h-14 rounded-2xl bg-white/[0.04] grid place-items-center">
@@ -374,18 +388,20 @@ onMounted(loadAccounts)
         <button v-if="!rows.length" @click="showImport = true" class="btn-soft mt-1">导入第一个</button>
       </div>
 
-      <table v-else class="w-full text-sm table-fixed">
+      <table v-else class="w-full text-sm table-fixed min-w-[1040px]">
         <colgroup>
           <col class="w-9" />      <!-- select -->
           <col />                  <!-- identity (flex) -->
           <col class="w-20" />     <!-- type -->
           <col class="w-24" />     <!-- remaining -->
+          <col class="w-16" />     <!-- weight -->
+          <col class="w-16" />     <!-- concurrency -->
           <col class="w-32" />     <!-- reset -->
           <col class="w-28" />     <!-- created -->
           <col class="w-28" />     <!-- last used -->
           <col class="w-40" />     <!-- inflight/success/fail -->
           <col class="w-16" />     <!-- status switch -->
-          <col class="w-16" />     <!-- actions -->
+          <col class="w-24" />     <!-- actions -->
         </colgroup>
         <thead>
           <tr class="text-[10px] uppercase tracking-[0.2em] text-white/40 border-b border-white/[0.06]">
@@ -396,6 +412,8 @@ onMounted(loadAccounts)
             <th class="text-left px-5 py-3 font-medium">账户</th>
             <th class="text-left px-3 py-3 font-medium">类型</th>
             <th class="text-right px-3 py-3 font-medium">额度</th>
+            <th class="text-center px-3 py-3 font-medium">权重</th>
+            <th class="text-center px-3 py-3 font-medium">并发</th>
             <th class="text-left px-3 py-3 font-medium">恢复时间</th>
             <th class="text-left px-3 py-3 font-medium">创建时间</th>
             <th class="text-left px-3 py-3 font-medium">最后使用</th>
@@ -444,6 +462,20 @@ onMounted(loadAccounts)
                     class="font-mono font-semibold"
                     :class="a.remaining > 0 ? 'text-emerald-300' : 'text-rose-300'">{{ a.remaining }}{{ a.type === 'grok' ? '%' : '' }}</span>
               <span v-else class="text-white/25" :title="a._quotaError || ''">—</span>
+            </td>
+            <!-- weight (editable, all accounts) -->
+            <td class="px-3 py-3.5 align-middle text-center whitespace-nowrap">
+              <input type="number" :value="a.weight" @change="saveField(a, 'weight', $event.target.value)"
+                     class="w-12 bg-white/5 border border-white/10 rounded px-1 py-0.5 text-xs text-center tabular-nums focus:border-indigo-400 outline-none"
+                     title="权重(高的优先)" />
+            </td>
+            <!-- concurrency (editable only for custom upstreams; others = system fixed) -->
+            <td class="px-3 py-3.5 align-middle text-center whitespace-nowrap">
+              <input v-if="a.type === 'custom'" type="number" min="1" :value="a.concurrency || 1"
+                     @change="saveField(a, 'concurrency', $event.target.value)"
+                     class="w-12 bg-white/5 border border-white/10 rounded px-1 py-0.5 text-xs text-center tabular-nums focus:border-indigo-400 outline-none"
+                     title="并发数(仅上游可设)" />
+              <span v-else class="text-white/25 text-xs" title="系统固定">{{ a.type === 'grok' ? 10 : 1 }}</span>
             </td>
             <!-- reset_after -->
             <td class="px-3 py-3.5 align-middle text-xs whitespace-nowrap">
@@ -494,10 +526,15 @@ onMounted(loadAccounts)
               </button>
             </td>
             <!-- actions -->
-            <td class="px-3 py-3.5 align-middle text-right whitespace-nowrap">
-              <button @click="deleteAccount(a.pool, a.id)" class="act danger" title="删除">
-                <Icon name="trash" class="w-3.5 h-3.5" />
-              </button>
+            <td class="px-3 py-3.5 align-middle whitespace-nowrap">
+              <div class="flex items-center justify-end gap-2">
+                <button v-if="a.type === 'custom'" @click="editUpstream(a)" class="act" title="编辑上游">
+                  <Icon name="config" class="w-3.5 h-3.5" />
+                </button>
+                <button @click="deleteAccount(a.pool, a.id)" class="act danger" title="删除">
+                  <Icon name="trash" class="w-3.5 h-3.5" />
+                </button>
+              </div>
             </td>
           </tr>
         </tbody>
@@ -520,6 +557,7 @@ onMounted(loadAccounts)
     </div>
 
     <ImportModal v-if="showImport" @close="showImport = false" @imported="loadAccounts" />
+    <UpstreamModal v-if="showUpstream" :account="editingUpstream" @close="showUpstream = false; editingUpstream = null" @imported="loadAccounts" />
   </section>
 </template>
 

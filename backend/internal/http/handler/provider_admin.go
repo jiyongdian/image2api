@@ -132,6 +132,38 @@ func (h *ProviderAdminHandler) ImportGrokToken(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true, "id": item.ID, "status": item.Status, "pending": item.Status == "pending"})
 }
 
+func (h *ProviderAdminHandler) ImportCustomAccount(c *gin.Context) {
+	var body struct {
+		BaseURL     string `json:"base_url"`
+		URL         string `json:"url"`
+		Key         string `json:"key"`
+		APIKey      string `json:"api_key"`
+		Models      string `json:"models"`
+		Name        string `json:"name"`
+		Weight      int    `json:"weight"`
+		Concurrency int    `json:"concurrency"`
+		ID          string `json:"id"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid request body"})
+		return
+	}
+	baseURL := body.BaseURL
+	if baseURL == "" {
+		baseURL = body.URL
+	}
+	key := body.Key
+	if key == "" {
+		key = body.APIKey
+	}
+	item, err := h.tokens.ImportCustomAccount(c.Request.Context(), baseURL, key, body.Models, body.Name, body.Weight, body.Concurrency, body.ID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "id": item.ID, "status": item.Status})
+}
+
 func (h *ProviderAdminHandler) ImportKreaCookie(c *gin.Context) {
 	var body struct {
 		Cookie string `json:"cookie"`

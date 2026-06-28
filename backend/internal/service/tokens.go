@@ -34,6 +34,7 @@ var validTokenPools = map[string]string{
 	"krea":     "krea",
 	"imagine":  "imagine",
 	"grok":     "grok",
+	"custom":   "custom",
 }
 
 type TokenService struct {
@@ -947,6 +948,68 @@ func (s *TokenService) checkPendingGrok(tokenID, ssoToken string) {
 	s.finishPending(ctx, "grok", tokenID, "active", false, quotaMeta)
 }
 
+// ImportCustomAccount adds an upstream as a custom account: base_url + key, the
+// csv list of model ids it serves (empty = all), plus optional weight and
+// per-account concurrency. No probe — the account goes active immediately and is
+// matched to custom models by id at generation time. Calls go direct (no proxy).
+func (s *TokenService) ImportCustomAccount(ctx context.Context, baseURL, apiKey, models, name string, weight, concurrency int, tokenID string) (*model.TokenAccount, error) {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	apiKey = strings.TrimSpace(apiKey)
+	// Edit mode: tokenID points at an existing custom account. base_url required;
+	// a blank key keeps the stored one.
+	if strings.TrimSpace(tokenID) != "" {
+		existing, gerr := s.tokens.Get(ctx, "custom", tokenID)
+		if gerr != nil {
+			return nil, gerr
+		}
+		if baseURL == "" {
+			return nil, errors.New("base_url required")
+		}
+		meta := datatypes.JSONMap{"base_url": baseURL}
+		if m := strings.TrimSpace(models); m != "" {
+			meta["models"] = m
+		}
+		patch := map[string]any{"meta": meta, "weight": weight, "concurrency": concurrency, "account_email": strings.TrimSpace(name)}
+		if apiKey != "" {
+			patch["value"] = apiKey
+		}
+		item, uerr := s.tokens.Update(ctx, "custom", tokenID, patch)
+		if uerr != nil {
+			return nil, uerr
+		}
+		_ = existing
+		return item, nil
+	}
+	if baseURL == "" || apiKey == "" {
+		return nil, errors.New("base_url and key required")
+	}
+	meta := datatypes.JSONMap{"base_url": baseURL}
+	if m := strings.TrimSpace(models); m != "" {
+		meta["models"] = m
+	}
+	tokenID = newTokenID("custom")
+	item, err := s.createToken(ctx, "custom", tokenID, apiKey, "active", meta)
+	if err != nil {
+		return nil, err
+	}
+	patch := map[string]any{}
+	if strings.TrimSpace(name) != "" {
+		patch["account_email"] = strings.TrimSpace(name)
+	}
+	if weight != 0 {
+		patch["weight"] = weight
+	}
+	if concurrency > 0 {
+		patch["concurrency"] = concurrency
+	}
+	if len(patch) > 0 {
+		if updated, uerr := s.tokens.Update(ctx, "custom", tokenID, patch); uerr == nil {
+			item = updated
+		}
+	}
+	return item, nil
+}
+
 // finishPending writes the terminal status/dead flag and clears the pending_check
 // marker (merging any cached quota) for a background import probe.
 func (s *TokenService) finishPending(ctx context.Context, pool, id, status string, dead bool, quotaMeta map[string]any) {
@@ -1546,6 +1609,10 @@ func accountRow(item model.TokenAccount, inFlight int64) map[string]any {
 		"pending":           pending,
 		"quota_supported":   hasQuota,
 		"needs_reset_fetch": typeLabel == "adobe" && item.Status == "active" && strings.TrimSpace(item.CachedQuotaResetAfter) == "",
+		"weight":            item.Weight,
+		"concurrency":       item.Concurrency,
+		"base_url":          emptyToNil(strings.TrimSpace(stringValue(item.Meta["base_url"]))),
+		"models":            strings.TrimSpace(stringValue(item.Meta["models"])),
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"backend/internal/model"
 	"backend/internal/provider/adobe"
 	"backend/internal/provider/chatgpt"
+	"backend/internal/provider/custom"
 	"backend/internal/provider/grok"
 	"backend/internal/provider/imagine"
 	"backend/internal/provider/krea"
@@ -110,7 +111,8 @@ func NewApp(ctx context.Context) (*App, error) {
 	kreaClient := krea.NewClient("")
 	imagineClient := imagine.NewClient("")
 	grokClient := grok.NewClient("")
-	v1Svc := service.NewV1Service(cfg, modelRepo, userRepo, eventRepo, tokenRepo, siteRepo, adobeClient, chatGPTClient, runwayClient, leonardoClient, kreaClient, imagineClient, grokClient, rustfsClient)
+	customClient := custom.NewClient()
+	v1Svc := service.NewV1Service(cfg, modelRepo, userRepo, eventRepo, tokenRepo, siteRepo, adobeClient, chatGPTClient, runwayClient, leonardoClient, kreaClient, imagineClient, grokClient, customClient, rustfsClient)
 	siteSvc := service.NewSiteService(siteRepo, cfg.AppTitle)
 	showcaseSvc := service.NewShowcaseService(showcaseRepo)
 	adminReadSvc := service.NewAdminReadService(cfg, userRepo, modelRepo, eventRepo, siteRepo, tokenRepo, cdkRepo, rustfsClient)

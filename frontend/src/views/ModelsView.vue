@@ -3,12 +3,14 @@ import { ref, computed, onMounted } from 'vue'
 import { api } from '../api'
 import Icon from '../components/Icon.vue'
 import ModelFormModal from '../components/ModelFormModal.vue'
+import CustomModelModal from '../components/CustomModelModal.vue'
 import TestModal from '../components/TestModal.vue'
 import { points } from '../credits'
 
 const models = ref([])
 const loading = ref(false)
 const showForm = ref(false)
+const showCustom = ref(false)
 const editing = ref(null) // null = add, object = edit
 const testing = ref(null) // model being tested, or null
 
@@ -119,6 +121,9 @@ onMounted(loadModels)
       </button>
       <button @click="openAdd" class="btn-primary">
         <Icon name="plus" class="w-3.5 h-3.5" /> 新增模型
+      </button>
+      <button @click="showCustom = true" class="btn-soft">
+        <Icon name="plus" class="w-3.5 h-3.5" /> 自定义模型
       </button>
     </div>
 
@@ -268,6 +273,7 @@ onMounted(loadModels)
     </div>
 
     <ModelFormModal v-if="showForm" :model="editing" @close="showForm = false" @saved="onSaved" />
+    <CustomModelModal v-if="showCustom" @close="showCustom = false" @saved="() => { showCustom = false; loadModels() }" />
     <TestModal v-if="testing" :model="testing" @close="testing = null" />
   </section>
 </template>

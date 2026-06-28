@@ -142,7 +142,7 @@ async function run() {
     busy.value = false
     resultUrl.value = r.data.url
     resultKind.value = r.data.kind || (isVideo ? 'video' : 'image')
-    status.value = `完成 · ${r.data.provider} · ${r.data.elapsed_ms}ms`
+    status.value = `完成 · ${r.data.provider} · ${(r.data.elapsed_ms / 1000).toFixed(1)}s`
   } else if (GATEWAY_TIMEOUT.has(r.status)) {
     // CDN/代理回源超时(如 EdgeOne 524)—— 后端仍在生成。保持锁住,轮询恢复结果。
     status.value = isVideo ? '生成视频中 (约 1–3 分钟)…' : '生成中…'

@@ -73,7 +73,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocClick))
     <button type="button" @click="toggle" @keydown="onKeydown"
             :aria-expanded="open"
             :disabled="disabled"
-            class="field flex items-center justify-between gap-2 text-left disabled:opacity-50 disabled:cursor-not-allowed"
+            class="field flex items-center justify-between gap-2 text-left h-10 !py-0 disabled:opacity-50 disabled:cursor-not-allowed"
             :class="[mono ? 'font-mono' : '', selected ? '' : 'text-[color:var(--fg-faint)]']">
       <span class="truncate">{{ label }}</span>
       <Icon name="chevron"

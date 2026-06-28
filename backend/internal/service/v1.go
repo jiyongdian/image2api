@@ -15,10 +15,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"strconv"
+
 	"backend/internal/config"
 	"backend/internal/model"
 	"backend/internal/provider/adobe"
 	"backend/internal/provider/chatgpt"
+	"backend/internal/provider/custom"
 	"backend/internal/provider/grok"
 	"backend/internal/provider/imagine"
 	"backend/internal/provider/krea"
@@ -70,6 +73,7 @@ type V1Service struct {
 	krea     *krea.Client
 	imagine  *imagine.Client
 	grok     *grok.Client
+	custom   *custom.Client
 	store    *storage.Client
 	// refresh re-mints an Adobe access token from its cookie when a request hits a
 	// 401 mid-flight (set via SetRefresh — wired after construction to avoid an
@@ -195,7 +199,7 @@ type V1VideoRequest struct {
 	BaseURL string
 }
 
-func NewV1Service(cfg *config.Config, models *repo.ModelRepository, users *repo.UserRepository, events *repo.EventRepository, tokens *repo.TokenRepository, settings *repo.SiteSettingRepository, adobeClient *adobe.Client, chatGPTClient *chatgpt.Client, runwayClient *runway.Client, leonardoClient *leonardo.Client, kreaClient *krea.Client, imagineClient *imagine.Client, grokClient *grok.Client, store *storage.Client) *V1Service {
+func NewV1Service(cfg *config.Config, models *repo.ModelRepository, users *repo.UserRepository, events *repo.EventRepository, tokens *repo.TokenRepository, settings *repo.SiteSettingRepository, adobeClient *adobe.Client, chatGPTClient *chatgpt.Client, runwayClient *runway.Client, leonardoClient *leonardo.Client, kreaClient *krea.Client, imagineClient *imagine.Client, grokClient *grok.Client, customClient *custom.Client, store *storage.Client) *V1Service {
 	return &V1Service{
 		cfg:      cfg,
 		models:   models,
@@ -210,6 +214,7 @@ func NewV1Service(cfg *config.Config, models *repo.ModelRepository, users *repo.
 		krea:     kreaClient,
 		imagine:  imagineClient,
 		grok:     grokClient,
+		custom:   customClient,
 		store:    store,
 		inflight: &InflightRegistry{},
 	}
@@ -352,7 +357,7 @@ func (s *V1Service) prepareImageExecution(ctx context.Context, principal *APIPri
 	startedAt := time.Now()
 
 	var imageBytes []byte
-	switch modelItem.Provider {
+	switch s.effectiveProvider(genCtx, modelItem) {
 	case "adobe":
 		b, execErr := s.generateAdobeImage(genCtx, eventID, modelItem, in, aspectRatio, resolution)
 		if execErr != nil {
@@ -449,6 +454,23 @@ func (s *V1Service) prepareImageExecution(ctx context.Context, principal *APIPri
 			case errors.Is(execErr, runway.ErrQuotaExhausted):
 				return nil, ErrProviderQuota
 			case errors.Is(execErr, runway.ErrTemporaryUpstream):
+				return nil, ErrProviderTemporary
+			default:
+				return nil, fmt.Errorf("%w: %v", ErrProviderExecution, execErr)
+			}
+		}
+		imageBytes = b
+	case "custom":
+		b, execErr := s.generateCustomImage(genCtx, eventID, modelItem, in, aspectRatio, resolution)
+		if execErr != nil {
+			_ = s.refundIfNeeded(ctx, principal, eventID, price)
+			_ = s.events.UpdateStatus(ctx, eventID, "failed", execErr.Error(), 0)
+			switch {
+			case errors.Is(execErr, custom.ErrAuth):
+				return nil, ErrProviderAuth
+			case errors.Is(execErr, custom.ErrQuotaExhausted):
+				return nil, ErrProviderQuota
+			case errors.Is(execErr, custom.ErrTemporaryUpstream):
 				return nil, ErrProviderTemporary
 			default:
 				return nil, fmt.Errorf("%w: %v", ErrProviderExecution, execErr)
@@ -552,13 +574,15 @@ func (s *V1Service) prepareVideoExecution(ctx context.Context, principal *APIPri
 
 	var videoBytes []byte
 	var execErr error
-	switch modelItem.Provider {
+	switch s.effectiveProvider(genCtx, modelItem) {
 	case "adobe":
 		videoBytes, _, execErr = s.generateAdobeVideo(genCtx, eventID, modelItem, in, aspectRatio, resolution, parseDurationSeconds(duration), true)
 	case "runway":
 		videoBytes, _, execErr = s.generateRunwayVideo(genCtx, eventID, modelItem, in, aspectRatio, parseDurationSeconds(duration), true)
 	case "grok":
 		videoBytes, _, execErr = s.generateGrokVideo(genCtx, eventID, modelItem, in, aspectRatio, resolution, parseDurationSeconds(duration), true)
+	case "custom":
+		videoBytes, _, execErr = s.generateCustomVideo(genCtx, eventID, modelItem, in, aspectRatio, resolution, parseDurationSeconds(duration), true)
 	default:
 		_ = s.refundIfNeeded(ctx, principal, eventID, price)
 		_ = s.events.UpdateStatus(ctx, eventID, "failed", "provider not implemented", 0)
@@ -570,11 +594,11 @@ func (s *V1Service) prepareVideoExecution(ctx context.Context, principal *APIPri
 		switch {
 		case errors.Is(execErr, ErrNoProviderAccount):
 			return nil, ErrNoProviderAccount
-		case errors.Is(execErr, adobe.ErrAuth), errors.Is(execErr, runway.ErrAuth), errors.Is(execErr, grok.ErrAuth):
+		case errors.Is(execErr, adobe.ErrAuth), errors.Is(execErr, runway.ErrAuth), errors.Is(execErr, grok.ErrAuth), errors.Is(execErr, custom.ErrAuth):
 			return nil, ErrProviderAuth
-		case errors.Is(execErr, adobe.ErrQuotaExhausted), errors.Is(execErr, runway.ErrQuotaExhausted), errors.Is(execErr, grok.ErrQuotaExhausted):
+		case errors.Is(execErr, adobe.ErrQuotaExhausted), errors.Is(execErr, runway.ErrQuotaExhausted), errors.Is(execErr, grok.ErrQuotaExhausted), errors.Is(execErr, custom.ErrQuotaExhausted):
 			return nil, ErrProviderQuota
-		case errors.Is(execErr, adobe.ErrTemporaryUpstream), errors.Is(execErr, runway.ErrTemporaryUpstream), errors.Is(execErr, grok.ErrTemporaryUpstream):
+		case errors.Is(execErr, adobe.ErrTemporaryUpstream), errors.Is(execErr, runway.ErrTemporaryUpstream), errors.Is(execErr, grok.ErrTemporaryUpstream), errors.Is(execErr, custom.ErrTemporaryUpstream):
 			return nil, ErrProviderTemporary
 		default:
 			return nil, fmt.Errorf("%w: %v", ErrProviderExecution, execErr)
@@ -658,13 +682,15 @@ func (s *V1Service) runVideoJob(ctx context.Context, principal *APIPrincipal, in
 
 	var videoURL string
 	var execErr error
-	switch modelItem.Provider {
+	switch s.effectiveProvider(genCtx, modelItem) {
 	case "adobe":
 		_, videoURL, execErr = s.generateAdobeVideo(genCtx, eventID, modelItem, in, aspectRatio, resolution, parseDurationSeconds(duration), false)
 	case "runway":
 		_, videoURL, execErr = s.generateRunwayVideo(genCtx, eventID, modelItem, in, aspectRatio, parseDurationSeconds(duration), false)
 	case "grok":
 		_, videoURL, execErr = s.generateGrokVideo(genCtx, eventID, modelItem, in, aspectRatio, resolution, parseDurationSeconds(duration), false)
+	case "custom":
+		_, videoURL, execErr = s.generateCustomVideo(genCtx, eventID, modelItem, in, aspectRatio, resolution, parseDurationSeconds(duration), false)
 	default:
 		_ = s.refundIfNeeded(ctx, principal, eventID, price)
 		_ = s.events.UpdateStatus(ctx, eventID, "failed", "provider not implemented", 0)
@@ -859,11 +885,16 @@ func (s *V1Service) prepareImage(ctx context.Context, principal *APIPrincipal, i
 	if !modelItem.Enabled || modelItem.Type != "image" {
 		return nil, "", "", 0, ErrUnknownModel
 	}
-	// Fail fast before charging if the provider has no usable account.
-	if ok, err := s.hasActiveProviderToken(ctx, modelItem.Provider, "image"); err != nil {
-		return nil, "", "", 0, err
-	} else if !ok {
-		return nil, "", "", 0, ErrNoProviderAccount
+	// Fail fast before charging if the provider has no usable account. Use the
+	// effective provider: a custom upstream serving this model id routes to
+	// "custom" (effectiveProvider only returns it when such an account exists, so
+	// the precheck is satisfied); otherwise check the native provider pool.
+	if eff := s.effectiveProvider(ctx, modelItem); eff != "custom" {
+		if ok, err := s.hasActiveProviderToken(ctx, eff, "image"); err != nil {
+			return nil, "", "", 0, err
+		} else if !ok {
+			return nil, "", "", 0, ErrNoProviderAccount
+		}
 	}
 	refLimit := 0
 	if modelItem.ImageToImage {
@@ -921,8 +952,10 @@ func (s *V1Service) prepareVideo(ctx context.Context, principal *APIPrincipal, i
 	if !modelItem.Enabled || modelItem.Type != "video" {
 		return nil, "", "", "", 0, ErrUnknownModel
 	}
-	// Fail fast before charging if the provider has no usable account.
-	if ok, err := s.hasActiveProviderToken(ctx, modelItem.Provider, "video"); err != nil {
+	// Fail fast before charging — effective provider (custom upstream by id, else native).
+	if eff := s.effectiveProvider(ctx, modelItem); eff == "custom" {
+		// custom serves this id (effectiveProvider guaranteed it) — precheck ok
+	} else if ok, err := s.hasActiveProviderToken(ctx, eff, "video"); err != nil {
 		return nil, "", "", "", 0, err
 	} else if !ok {
 		return nil, "", "", "", 0, ErrNoProviderAccount
@@ -1532,6 +1565,246 @@ func (s *V1Service) generateRunwayVideo(ctx context.Context, eventID string, mod
 		lastErr = ErrProviderExecution
 	}
 	return nil, "", lastErr
+}
+
+// customAccountServes reports whether a custom (upstream) account is usable for a
+// given model id: active, not dead, has a base_url, and its meta.models list (csv
+// of model ids it serves) contains the id. An empty models list serves ALL ids.
+func customAccountServes(item model.TokenAccount, modelID string) bool {
+	if item.Status != "active" || item.Dead || strings.TrimSpace(item.Value) == "" {
+		return false
+	}
+	if item.Meta == nil || strings.TrimSpace(stringValue(item.Meta["base_url"])) == "" {
+		return false
+	}
+	list := strings.TrimSpace(stringValue(item.Meta["models"]))
+	if list == "" {
+		return true
+	}
+	for _, m := range strings.Split(list, ",") {
+		if strings.EqualFold(strings.TrimSpace(m), modelID) {
+			return true
+		}
+	}
+	return false
+}
+
+// customActive returns the custom accounts that serve modelID, ordered by weight
+// (higher first; ties by id) so heavier upstreams are preferred.
+func (s *V1Service) customActive(ctx context.Context, modelID string) ([]model.TokenAccount, error) {
+	items, err := s.tokens.ListByPool(ctx, "custom")
+	if err != nil {
+		return nil, err
+	}
+	var active []model.TokenAccount
+	for _, item := range items {
+		if customAccountServes(item, modelID) {
+			active = append(active, item)
+		}
+	}
+	s.rotateRoundRobin("custom", active) // weight priority + round-robin within ties
+	return active, nil
+}
+
+// accountConcurrency is the per-account simultaneous-job cap. Custom accounts use
+// their configured Concurrency (default 1); built-in pools use the system value.
+func accountConcurrency(item model.TokenAccount) int {
+	if item.Concurrency > 0 {
+		return item.Concurrency
+	}
+	return 1
+}
+
+// effectiveProvider routes a model to the "custom" upstream whenever a custom
+// account declares it serves that model id (id-based override of the model's
+// native provider) — so an upstream can take over any model by matching its id.
+// Otherwise the model's own provider is used.
+func (s *V1Service) effectiveProvider(ctx context.Context, modelItem *model.ModelConfig) string {
+	if s.custom != nil {
+		if active, err := s.customActive(ctx, modelItem.ID); err == nil && len(active) > 0 {
+			return "custom"
+		}
+	}
+	return modelItem.Provider
+}
+
+// generateCustomImage forwards an image generation to an OpenAI-compatible
+// upstream. The upstream (custom account) is matched by model id; calls go direct
+// (no proxy). Billing uses the local model price.
+func (s *V1Service) generateCustomImage(ctx context.Context, eventID string, modelItem *model.ModelConfig, in V1ImageRequest, aspectRatio, resolution string) ([]byte, error) {
+	if s.custom == nil {
+		return nil, errors.New("custom client not configured")
+	}
+	refs, err := decodeReferenceImages(in.ReferenceImages, max(1, modelItem.MaxReferenceImages))
+	if err != nil {
+		return nil, err
+	}
+	active, err := s.customActive(ctx, modelItem.ID)
+	if err != nil {
+		return nil, err
+	}
+	if len(active) == 0 {
+		return nil, ErrNoProviderAccount
+	}
+	size := upstreamSize(aspectRatio, resolution)
+	quality := upstreamQuality(resolution)
+	var lastErr error
+	busy := 0
+	for _, token := range active {
+		if !s.gate.tryAcquireN(token.ID, accountConcurrency(token)) {
+			busy++
+			continue
+		}
+		var data []byte
+		done, failover := func() (bool, bool) {
+			defer s.gate.release(token.ID)
+			_ = s.events.SetAccount(ctx, eventID, token.ID)
+			_ = s.tokens.TouchLastUsed(ctx, token.ID)
+			baseURL := stringValue(token.Meta["base_url"])
+			d, genErr := s.custom.GenerateImage(ctx, baseURL, token.Value, modelItem.ID, in.Prompt, size, quality, refs)
+			if genErr == nil {
+				_, _ = s.tokens.Update(ctx, "custom", token.ID, map[string]any{
+					"last_used_at": time.Now(), "success_total": gorm.Expr("success_total + 1"), "fails": 0,
+				})
+				data = d
+				return true, false
+			}
+			lastErr = genErr
+			switch {
+			case errors.Is(genErr, custom.ErrAuth):
+				s.markTokenFailure(ctx, "custom", token, "image", true, false)
+				return false, true
+			case errors.Is(genErr, custom.ErrQuotaExhausted):
+				s.markTokenFailure(ctx, "custom", token, "image", false, true)
+				return false, true
+			case errors.Is(genErr, custom.ErrTemporaryUpstream):
+				return false, true
+			default:
+				return false, false
+			}
+		}()
+		if done {
+			return data, nil
+		}
+		if failover {
+			continue
+		}
+		return nil, lastErr
+	}
+	if lastErr == nil {
+		if busy > 0 {
+			return nil, ErrConcurrencyFull
+		}
+		lastErr = ErrProviderExecution
+	}
+	return nil, lastErr
+}
+
+// generateCustomVideo forwards a video generation to an OpenAI-compatible
+// (Sora-style) upstream, matched by model id. No proxy; local-price billing.
+func (s *V1Service) generateCustomVideo(ctx context.Context, eventID string, modelItem *model.ModelConfig, in V1VideoRequest, aspectRatio, resolution string, durationSeconds int, downloadResult bool) ([]byte, string, error) {
+	if s.custom == nil {
+		return nil, "", errors.New("custom client not configured")
+	}
+	active, err := s.customActive(ctx, modelItem.ID)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(active) == 0 {
+		return nil, "", ErrNoProviderAccount
+	}
+	size := upstreamSize(aspectRatio, resolution)
+	var lastErr error
+	var videoURL string
+	busy := 0
+	for _, token := range active {
+		if !s.gate.tryAcquireN(token.ID, accountConcurrency(token)) {
+			busy++
+			continue
+		}
+		var data []byte
+		done, failover := func() (bool, bool) {
+			defer s.gate.release(token.ID)
+			_ = s.events.SetAccount(ctx, eventID, token.ID)
+			_ = s.tokens.TouchLastUsed(ctx, token.ID)
+			baseURL := stringValue(token.Meta["base_url"])
+			d, url, genErr := s.custom.GenerateVideo(ctx, baseURL, token.Value, modelItem.ID, in.Prompt, size, durationSeconds, downloadResult)
+			if genErr == nil {
+				_, _ = s.tokens.Update(ctx, "custom", token.ID, map[string]any{
+					"last_used_at": time.Now(), "success_total": gorm.Expr("success_total + 1"), "fails": 0,
+				})
+				data = d
+				videoURL = url
+				return true, false
+			}
+			lastErr = genErr
+			switch {
+			case errors.Is(genErr, custom.ErrAuth):
+				s.markTokenFailure(ctx, "custom", token, "video", true, false)
+				return false, true
+			case errors.Is(genErr, custom.ErrQuotaExhausted):
+				s.markTokenFailure(ctx, "custom", token, "video", false, true)
+				return false, true
+			case errors.Is(genErr, custom.ErrTemporaryUpstream):
+				return false, true
+			default:
+				return false, false
+			}
+		}()
+		if done {
+			return data, videoURL, nil
+		}
+		if failover {
+			continue
+		}
+		return nil, "", lastErr
+	}
+	if lastErr == nil {
+		if busy > 0 {
+			return nil, "", ErrConcurrencyFull
+		}
+		lastErr = ErrProviderExecution
+	}
+	return nil, "", lastErr
+}
+
+// upstreamSize maps our (ratio, resolution) to an OpenAI-style "WxH" size string
+// for the upstream. The pixel base scales with the tier (1K/2K/4K); the ratio
+// sets the shape. Upstreams that key off ratio (our own /v1) read it fine.
+func upstreamSize(aspectRatio, resolution string) string {
+	base := 1024
+	switch strings.ToUpper(strings.TrimSpace(resolution)) {
+	case "2K":
+		base = 2048
+	case "4K":
+		base = 4096
+	}
+	w, h := 1, 1
+	parts := strings.Split(strings.ReplaceAll(strings.TrimSpace(aspectRatio), "x", ":"), ":")
+	if len(parts) == 2 {
+		if a, e1 := strconv.Atoi(strings.TrimSpace(parts[0])); e1 == nil && a > 0 {
+			if b, e2 := strconv.Atoi(strings.TrimSpace(parts[1])); e2 == nil && b > 0 {
+				w, h = a, b
+			}
+		}
+	}
+	if w >= h {
+		return fmt.Sprintf("%dx%d", base, base*h/w)
+	}
+	return fmt.Sprintf("%dx%d", base*w/h, base)
+}
+
+// upstreamQuality maps a resolution tier to the OpenAI quality enum.
+func upstreamQuality(resolution string) string {
+	switch strings.ToUpper(strings.TrimSpace(resolution)) {
+	case "2K":
+		return "medium"
+	case "4K":
+		return "high"
+	case "1K":
+		return "low"
+	}
+	return ""
 }
 
 // generateGrokVideo runs grok's imagine video pipeline across the grok pool.
@@ -2567,19 +2840,35 @@ func (s *V1Service) nextCursor(pool string) uint64 {
 // retry chain is preserved — on failure the caller's loop simply continues to
 // the next account in rotation order.
 func (s *V1Service) rotateRoundRobin(pool string, items []model.TokenAccount) {
+	if len(items) <= 1 {
+		return
+	}
+	// Weight = priority: higher-weight accounts come first, so the scheduler tries
+	// them before lower-weight ones (and only falls through when they're at their
+	// concurrency cap). Within the SAME weight all accounts are equal, so they're
+	// rotated by the pool cursor for even distribution.
 	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].Weight != items[j].Weight {
+			return items[i].Weight > items[j].Weight
+		}
 		return items[i].ID < items[j].ID
 	})
-	n := len(items)
-	if n <= 1 {
-		return
+	start := int(s.nextCursor(pool))
+	for i := 0; i < len(items); {
+		j := i + 1
+		for j < len(items) && items[j].Weight == items[i].Weight {
+			j++
+		}
+		if g := j - i; g > 1 {
+			off := start % g
+			if off != 0 {
+				grp := items[i:j]
+				rot := make([]model.TokenAccount, 0, g)
+				rot = append(rot, grp[off:]...)
+				rot = append(rot, grp[:off]...)
+				copy(grp, rot)
+			}
+		}
+		i = j
 	}
-	start := int(s.nextCursor(pool) % uint64(n))
-	if start == 0 {
-		return
-	}
-	rotated := make([]model.TokenAccount, 0, n)
-	rotated = append(rotated, items[start:]...)
-	rotated = append(rotated, items[:start]...)
-	copy(items, rotated)
 }

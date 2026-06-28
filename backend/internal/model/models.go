@@ -103,6 +103,10 @@ type ModelConfig struct {
 	Durations          datatypes.JSON    `gorm:"type:jsonb"`
 	MaxReferenceImages int               `gorm:"not null;default:0"`
 	ReferenceMode      string            `gorm:"size:32;not null;default:'none'"`
+	// Custom-upstream models (provider="custom"): UpstreamModel is the model name
+	// sent to the upstream OpenAI-compatible API; the base_url + key live on the
+	// matching custom account (pool="custom", meta.base_url). Empty for built-ins.
+	UpstreamModel string `gorm:"size:255;not null;default:''"`
 	// Weight controls display order in the model dropdown / admin list: higher
 	// weight floats to the top (matches ShowcaseItem.Weight semantics). Ties fall
 	// back to created_at desc. Default 0.
@@ -146,6 +150,13 @@ type TokenAccount struct {
 	VideoLimited bool `gorm:"not null;default:false"`
 	AccountEmail          string `gorm:"size:255"`
 	AccountDisplayName    string `gorm:"size:255"`
+	// Weight biases scheduling order for ANY account — higher weight is picked
+	// first within its pool (ties fall back to round-robin). Default 0.
+	Weight int `gorm:"not null;default:0"`
+	// Concurrency is the max simultaneous jobs for THIS account. Only custom
+	// (upstream) accounts honor it; built-in pools use their system default
+	// (1 per account, grok 10). 0 = use the system default.
+	Concurrency           int `gorm:"not null;default:0"`
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
 }

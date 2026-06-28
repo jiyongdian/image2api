@@ -7,9 +7,13 @@ import Icon from './Icon.vue'
 const emit = defineEmits(['close', 'imported'])
 
 const input = ref('')
+const weight = ref(0)
 const status = ref('')
 const isError = ref(false)
 const submitting = ref(false)
+
+// type → token pool (for the post-import weight PATCH).
+const TYPE_POOL = { openai: 'chatgpt', adobe: 'adobe', runway: 'runway', leonardo: 'leonardo', krea: 'krea', imagine: 'imagine', grok: 'grok' }
 
 // Live preview of what the parser would extract — updates as the user types
 // so they can see whether their paste was understood before clicking import.
@@ -56,8 +60,15 @@ async function doSmartImport() {
               : it.type === 'imagine'
                 ? await api('/tokens/import-imagine-token', jsonBody('POST', { value: it.value }))
                 : await api('/tokens/import-adobe-cookie', jsonBody('POST', { cookie: it.value }))
-      if (r.ok) ok++
-      else { fail++; errs.push(`${it.type}: ${r.data?.detail || r.status}`) }
+      if (r.ok) {
+        ok++
+        // Apply the chosen weight to the freshly-imported account (best-effort).
+        const w = Number(weight.value) || 0
+        const pool = TYPE_POOL[it.type]
+        if (w !== 0 && pool && r.data?.id) {
+          try { await api(`/tokens/${pool}/${r.data.id}`, jsonBody('PATCH', { weight: w })) } catch (_) {}
+        }
+      } else { fail++; errs.push(`${it.type}: ${r.data?.detail || r.status}`) }
     } catch (e) {
       fail++; errs.push(`${it.type}: ${e}`)
     }
@@ -130,6 +141,10 @@ async function doSmartImport() {
             </span>
           </template>
           <span v-else class="text-rose-600">未识别到任何 Cookie 或 JWT</span>
+        </div>
+        <div class="mt-3 flex items-center gap-2">
+          <label class="text-xs text-slate-500 whitespace-nowrap">权重(本批账号,高的优先)</label>
+          <input v-model.number="weight" type="number" class="field !w-24" placeholder="0" />
         </div>
         <button @click="doSmartImport" :disabled="submitting || !detected.total" class="btn-primary w-full mt-3">
           {{ submitting ? '导入中…' : (detected.total ? `识别并导入 (${detected.total})` : '识别并导入') }}

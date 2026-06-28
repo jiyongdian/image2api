@@ -45,7 +45,7 @@
 
 ## ✨ 简介
 
-**image2api** 把 Adobe Firefly、OpenAI、Runway、Grok、Leonardo、Krea、Imagine 等平台的图像 / 视频能力,统一封装成**一套 OpenAI 兼容的 API**;背后用多账号池自动调度 —— 额度耗尽自动换号、认证失效自动刷新或判死、临时错误自动重试、token 到期前主动续期 —— 对外提供稳定服务。
+**image2api** 把 Adobe Firefly、OpenAI、Runway、Grok、Leonardo、Krea、Imagine 等平台,以及**任意 OpenAI 兼容上游**的图像 / 视频能力,统一封装成**一套 OpenAI 兼容的 API**;背后用多账号池自动调度 —— 权重优先 + 并发感知、额度耗尽自动换号、认证失效自动刷新或判死、临时错误自动重试、token 到期前主动续期 —— 对外提供稳定服务。
 
 它不只是 API 代理:自带**积分计费、CDK 充值、邀请奖励、用户体系、管理后台、现代化画图前端**,一条命令即可跑成一个对外运营的 AI 生成站点 —— 作者的线上实例 **[Vivid AI · vividai.run](https://vividai.run)**(品牌)即基于本项目搭建。
 
@@ -74,9 +74,16 @@
 - 图片结果 **base64 直返**,服务端不留存文件,隐私友好
 
 #### 🔁 多账号池 + 智能故障转移
-- 账号池轮询调度,单账号出错不影响整体
+- 账号池调度,单账号出错不影响整体
+- **权重优先 + 并发感知**:按账号权重从高到低调度,某账号并发满了才轮到下一个;同权重组内 round-robin 均摊。每账号并发数可配(上游账号),其余系统固定
 - **额度耗尽→换号** · **认证失效→刷新重试 / 判死** · **临时错误→同号重试 ×3** · **参数错→直接报错**
 - **预扣额度**:生成前原子扣减,失败自动退回,杜绝并发超额
+
+#### 🔗 自定义上游聚合(OpenAI 兼容)
+- 把任意 **OpenAI 兼容的 v1 端点**当成一个账号接入(填 `base_url` + `key`),无需写代码
+- **按 model id 自动路由**:上游声明支持哪些 id,生成该 id 时即走对应上游(可覆盖内置 provider);id 留空 = 全部
+- 模型管理里自由新建自定义模型(id / 类型 / 比例 / 分辨率·价 / 时长·价 / 参考图),按本地价计费
+- 调用**直连不走代理**;上游可配权重与并发,与内置池统一调度
 
 #### 🔐 Token 自动保活
 - 一次性轮换 token(Krea / Imagine)**到期前 10 分钟主动续期**,新 token 自动落库
@@ -110,8 +117,9 @@
 | **Leonardo.ai** | seedream-4.5 | 图像 |
 | **Krea.ai** | flux-klein-2 | 图像 |
 | **Imagine.art** | imagine-1.5 · imagine-1.5pro | 图像 |
+| **自定义上游** | 任意 OpenAI 兼容 v1 端点(按 id 路由) | 图像 / 视频 |
 
-> 模型由管理后台动态启用并定价,可随时增删。
+> 模型由管理后台动态启用并定价,可随时增删。自定义上游支持把任何 OpenAI 兼容服务接成账号,按 model id 路由调用。
 
 ## 🔌 OpenAI 兼容 API
 
@@ -238,7 +246,8 @@ backend/                       后端源码(Go)
 │   │   ├── grok/              Grok(grok.com,statsig 伪造,视频)
 │   │   ├── leonardo/          Leonardo
 │   │   ├── krea/              Krea
-│   │   └── imagine/           Imagine.art
+│   │   ├── imagine/           Imagine.art
+│   │   └── custom/            自定义上游(OpenAI 兼容 v1,按 id 路由,直连不走代理)
 │   ├── repo/                  数据访问层(用户 / 模型 / 账号 / 日志 / CDK…)
 │   ├── service/              业务逻辑(生成调度、计费、账号池、保活、维护)
 │   └── storage/               RustFS / S3 媒体存储
