@@ -139,7 +139,7 @@ function useExample(ex) {
         </h1>
 
         <p class="mt-8 text-base md:text-lg text-[color:var(--fg-2)] max-w-md leading-relaxed">
-          把脑海里的画面写成一句话,GPT、Gemini、Firefly、Flux 等顶级模型替你变成图像与视频。
+          {{ site.subtitle || '把脑海里的画面写成一句话,GPT、Gemini、Firefly、Flux 等顶级模型替你变成图像与视频。' }}
         </p>
 
         <div class="mt-10 flex items-center gap-4">

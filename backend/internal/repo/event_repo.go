@@ -238,6 +238,15 @@ func (r *EventRepository) CountBetween(ctx context.Context, start, end time.Time
 	return n, err
 }
 
+// CountPendingByUser returns how many generations the user currently has
+// in-flight (status=pending) — used to enforce the per-user concurrency limit.
+func (r *EventRepository) CountPendingByUser(ctx context.Context, userID string) (int64, error) {
+	var n int64
+	err := r.db.WithContext(ctx).Model(&model.EventLog{}).
+		Where("user_id = ? AND status = ?", userID, "pending").Count(&n).Error
+	return n, err
+}
+
 // DistinctUsersSince counts distinct (non-empty) user_ids active since `since`.
 func (r *EventRepository) DistinctUsersSince(ctx context.Context, since time.Time) (int64, error) {
 	var n int64

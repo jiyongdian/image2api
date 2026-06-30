@@ -16,8 +16,8 @@ const nav = computed(() => {
   const items = [{ to: '/', label: '首页', icon: 'overview' }]
   if (isAuthed()) {
     items.push({ to: '/user', label: '画图', icon: 'spark' })
-    items.push({ to: '/logs', label: '记录', icon: 'log' })
-    items.push({ to: '/mylogs', label: '日志', icon: 'files' })
+    items.push({ to: '/logs', label: '图片', icon: 'files' })
+    items.push({ to: '/mylogs', label: '日志', icon: 'log' })
     items.push({ to: '/invite', label: '邀请', icon: 'accounts' })
   }
   // 文档 + 关于 are public — visible to guests too.
@@ -53,7 +53,9 @@ const currentLabel = computed(() => {
     <aside class="fixed inset-y-0 left-0 z-30 w-16 md:w-20 flex flex-col items-center py-5 border-r border-[color:var(--hairline)]">
       <!-- Logo -->
       <router-link to="/" class="mb-8 group transition-transform hover:scale-105">
-        <Logo :size="40" class="rounded-xl shadow-lg shadow-violet-500/20 ring-1 ring-white/10" />
+        <img v-if="site.logo" :src="site.logo" :alt="site.title"
+             class="w-10 h-10 rounded-xl object-contain shadow-lg shadow-violet-500/20 ring-1 ring-white/10" />
+        <Logo v-else :size="40" class="rounded-xl shadow-lg shadow-violet-500/20 ring-1 ring-white/10" />
       </router-link>
 
       <!-- Nav -->
@@ -107,11 +109,10 @@ const currentLabel = computed(() => {
            stamp doesn't jump around. -->
       <header class="relative z-10 px-8 md:px-14 pt-10 pb-4 flex items-center justify-between gap-4">
         <div class="flex items-baseline gap-2">
-          <img v-if="site.logo" :src="site.logo" :alt="site.title" class="h-7 w-auto self-center object-contain" />
-          <span v-else class="text-[22px] font-bold tracking-tight bg-gradient-to-r from-fuchsia-300 via-violet-300 to-sky-300 bg-clip-text text-transparent">
+          <span class="text-[22px] font-bold tracking-tight bg-gradient-to-r from-fuchsia-300 via-violet-300 to-sky-300 bg-clip-text text-transparent">
             {{ site.title }}
           </span>
-          <span class="text-[10px] uppercase tracking-[0.3em] text-[color:var(--fg-faint)]">{{ route.path === '/' ? (site.subtitle || 'AI 生图 · 生视频') : currentLabel }}</span>
+          <span class="text-[10px] uppercase tracking-[0.3em] text-[color:var(--fg-faint)]">{{ route.path === '/' ? 'AI 生图 · 生视频' : currentLabel }}</span>
         </div>
         <router-link v-if="showBalance" to="/settings"
                      class="text-xs text-[color:var(--fg-2)] hover:text-[color:var(--fg)] tabular-nums transition-colors">

@@ -10,6 +10,7 @@ export const site = reactive({
   title: 'Vivid',
   logo: '',
   subtitle: '',
+  cdkRedeemEnabled: true,
   // Defaults so the 关于 page is never blank even if /site hasn't loaded (or a
   // cache serves an older payload without `contact`). The backend value, once
   // fetched, overrides these.
@@ -24,6 +25,18 @@ export const site = reactive({
   ready: false,
 })
 
+// Point the browser-tab favicon at a custom logo (or back to the default svg).
+export function applyFavicon(url) {
+  let link = document.querySelector("link[rel~='icon']")
+  if (!link) {
+    link = document.createElement('link')
+    link.rel = 'icon'
+    document.head.appendChild(link)
+  }
+  link.removeAttribute('type') // a png/jpg logo must not be forced as svg
+  link.href = url || '/favicon.svg'
+}
+
 export async function loadSite() {
   try {
     const r = await fetch(`${BASE}/admin/api/site`)
@@ -32,7 +45,10 @@ export async function loadSite() {
       if (data.title) site.title = String(data.title)
       site.logo = data.logo ? String(data.logo) : ''
       site.subtitle = data.subtitle ? String(data.subtitle) : ''
+      site.cdkRedeemEnabled = data.cdk_redeem_enabled !== false
       if (data.contact) site.contact = { ...site.contact, ...data.contact }
+      // The uploaded logo IS the site icon (favicon / 浏览器标签 / 收藏).
+      if (site.logo) applyFavicon(site.logo)
     }
   } catch { /* offline — keep the default. */ }
   site.ready = true

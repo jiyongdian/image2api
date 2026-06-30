@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -96,12 +97,19 @@ func NewApp(ctx context.Context) (*App, error) {
 	apiKeyRepo := repo.NewAPIKeyRepository(db)
 	tokenRepo := repo.NewTokenRepository(db)
 	refreshRepo := repo.NewRefreshProfileRepository(db)
+	cgroupRepo := repo.NewConcurrencyGroupRepository(db)
+	// Seed the "默认并发" group (cap 10) and bind any ungrouped users to it.
+	if err := cgroupRepo.EnsureDefault(ctx); err != nil {
+		log.Printf("ensure default concurrency group: %v", err)
+	}
+	concSvc := service.NewConcurrencyService(rdb)
+	cgroupSvc := service.NewConcurrencyGroupService(cgroupRepo, concSvc)
 	sessionSvc := service.NewSessionService(rdb, cfg.SessionTTL, cfg.SessionSlideAfter)
 	emailCodeSvc := service.NewEmailCodeService(rdb)
 	smtpSvc := service.NewSMTPService()
 	rateLimitSvc := service.NewRateLimitService(rdb)
 	rustfsClient := storage.New(cfg.RustFSEndpoint, cfg.RustFSBucket, cfg.RustFSAccessKey, cfg.RustFSSecretKey)
-	authSvc := service.NewAuthService(userRepo, siteRepo, sessionSvc, emailCodeSvc, smtpSvc)
+	authSvc := service.NewAuthService(userRepo, siteRepo, sessionSvc, emailCodeSvc, smtpSvc, cgroupRepo)
 	appSettingsSvc := service.NewAppSettingsService(siteRepo, eventRepo, smtpSvc, rustfsClient)
 	imageAccessSvc := service.NewImageAccessService(cfg.GeneratedRoot, showcaseRepo, authSvc)
 	adobeClient := adobe.NewClient("clio-playground-web", "")
@@ -112,12 +120,12 @@ func NewApp(ctx context.Context) (*App, error) {
 	imagineClient := imagine.NewClient("")
 	grokClient := grok.NewClient("")
 	customClient := custom.NewClient()
-	v1Svc := service.NewV1Service(cfg, modelRepo, userRepo, eventRepo, tokenRepo, siteRepo, adobeClient, chatGPTClient, runwayClient, leonardoClient, kreaClient, imagineClient, grokClient, customClient, rustfsClient)
+	v1Svc := service.NewV1Service(cfg, modelRepo, userRepo, eventRepo, tokenRepo, siteRepo, cgroupRepo, concSvc, adobeClient, chatGPTClient, runwayClient, leonardoClient, kreaClient, imagineClient, grokClient, customClient, rustfsClient)
 	siteSvc := service.NewSiteService(siteRepo, cfg.AppTitle)
 	showcaseSvc := service.NewShowcaseService(showcaseRepo)
 	adminReadSvc := service.NewAdminReadService(cfg, userRepo, modelRepo, eventRepo, siteRepo, tokenRepo, cdkRepo, rustfsClient)
-	adminWriteSvc := service.NewAdminWriteService(userRepo, showcaseRepo, modelRepo, eventRepo, apiKeyRepo)
-	cdkSvc := service.NewCDKService(cdkRepo, userRepo)
+	adminWriteSvc := service.NewAdminWriteService(userRepo, showcaseRepo, modelRepo, eventRepo, apiKeyRepo, tokenRepo)
+	cdkSvc := service.NewCDKService(cdkRepo, userRepo, siteRepo)
 	apiKeySvc := service.NewAPIKeyService(apiKeyRepo)
 	tokenSvc := service.NewTokenService(tokenRepo, refreshRepo, eventRepo, siteRepo, adobeClient, chatGPTClient, runwayClient, leonardoClient, kreaClient, imagineClient, grokClient)
 	refreshSvc := service.NewRefreshProfileService(refreshRepo, tokenRepo, adobeClient)
@@ -141,6 +149,7 @@ func NewApp(ctx context.Context) (*App, error) {
 		UserTools:     handler.NewUserToolsHandler(apiKeySvc, cdkSvc),
 		UserGen:       handler.NewUserGenerationHandler(userGenSvc, adminReadSvc),
 		ProviderAdmin: handler.NewProviderAdminHandler(tokenSvc, refreshSvc),
+		ConcGroups:    handler.NewConcurrencyGroupHandler(cgroupSvc),
 	})
 
 	// Background self-healing sweep (quota recovery, cookie refresh, stale-pending

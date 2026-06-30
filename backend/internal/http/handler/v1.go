@@ -72,7 +72,6 @@ func (h *V1Handler) ImageGenerations(c *gin.Context) {
 		Prompt:  body.Prompt,
 		N:       body.N,
 		Size:    body.Size,
-		Quality: body.Quality,
 		BaseURL: requestBaseURL(c),
 	})
 	if err != nil {
@@ -110,7 +109,6 @@ func (h *V1Handler) ImageEdits(c *gin.Context) {
 		Prompt:          c.PostForm("prompt"),
 		N:               n,
 		Size:            c.PostForm("size"),
-		Quality:         c.PostForm("quality"),
 		ReferenceImages: refs,
 		BaseURL:         requestBaseURL(c),
 	})
@@ -336,7 +334,7 @@ func (h *V1Handler) writeV1Error(c *gin.Context, err error, payload map[string]a
 		c.JSON(http.StatusUnauthorized, gin.H{"detail": err.Error()})
 	case errors.Is(err, service.ErrProviderTemporary):
 		c.JSON(http.StatusServiceUnavailable, gin.H{"detail": err.Error()})
-	case errors.Is(err, service.ErrConcurrencyFull):
+	case errors.Is(err, service.ErrConcurrencyFull), errors.Is(err, service.ErrUserConcurrencyFull):
 		c.JSON(http.StatusTooManyRequests, gin.H{"detail": err.Error()})
 	case errors.Is(err, service.ErrVideoJobNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"detail": err.Error()})

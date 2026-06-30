@@ -80,7 +80,7 @@ func (h *UserGenerationHandler) Generate(c *gin.Context) {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"detail": err.Error()})
 		case errors.Is(err, service.ErrProviderQuota):
 			c.JSON(http.StatusTooManyRequests, gin.H{"detail": err.Error()})
-		case errors.Is(err, service.ErrConcurrencyFull):
+		case errors.Is(err, service.ErrConcurrencyFull), errors.Is(err, service.ErrUserConcurrencyFull):
 			c.JSON(http.StatusTooManyRequests, gin.H{"detail": err.Error()})
 		case errors.Is(err, service.ErrProviderExecution):
 			c.JSON(http.StatusBadGateway, gin.H{"detail": err.Error()})
@@ -136,7 +136,7 @@ func (h *UserGenerationHandler) Test(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 		case errors.Is(err, service.ErrProviderQuota):
 			c.JSON(http.StatusTooManyRequests, gin.H{"detail": err.Error()})
-		case errors.Is(err, service.ErrConcurrencyFull):
+		case errors.Is(err, service.ErrConcurrencyFull), errors.Is(err, service.ErrUserConcurrencyFull):
 			c.JSON(http.StatusTooManyRequests, gin.H{"detail": err.Error()})
 		case errors.Is(err, service.ErrNoProviderAccount):
 			c.JSON(http.StatusServiceUnavailable, gin.H{"detail": err.Error()})

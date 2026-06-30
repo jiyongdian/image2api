@@ -13,6 +13,7 @@ const tabs = [
   { label: '模型管理', to: '/admin/models',   icon: 'models' },
   { label: '账号管理', to: '/admin/accounts', icon: 'plug' },
   { label: '用户管理', to: '/admin/users',    icon: 'accounts' },
+  { label: '并发分组', to: '/admin/concurrency', icon: 'shield' },
   { label: '兑换码',   to: '/admin/cdks',     icon: 'spark' },
   { label: '邀请日志', to: '/admin/invites',  icon: 'accounts' },
   { label: '图片管理', to: '/admin/images',   icon: 'files' },

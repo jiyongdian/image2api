@@ -20,7 +20,7 @@ const showAdd = ref(false)
 const editing = ref(null)
 const toast = ref('')
 
-const addForm = ref({ email: '', name: '', password: '', role: 'user', credits: 0, notes: '' })
+const addForm = ref({ email: '', name: '', password: '', role: 'user', credits: 0, notes: '', concurrency_group_id: '' })
 
 const STATUS_OPTIONS = [
   { value: 'active', label: '正常' },
@@ -35,6 +35,26 @@ const ROLE_OPTIONS = [
 ]
 const roleLabel = (r) => ({ user: '用户', agent: '代理', admin: '管理员' }[r] || '用户')
 
+// Concurrency groups — resolve a user's group id → name/limit for the table,
+// and offer them in the edit form.
+const cgroups = ref([])
+const cgroupOptions = computed(() => cgroups.value.map((g) => ({ value: g.id, label: g.name })))
+const cgroupById = computed(() => Object.fromEntries(cgroups.value.map((g) => [g.id, g])))
+function cgroupLabel(id) {
+  const g = cgroupById.value[id]
+  if (!g) return '—'
+  return g.max_concurrency > 0 ? `${g.name} · ${g.max_concurrency}` : `${g.name} · 不限`
+}
+async function loadGroups() {
+  const r = await api('/concurrency-groups')
+  cgroups.value = r.data?.data || []
+  // Default the 新建用户 form to the default registration group.
+  if (!addForm.value.concurrency_group_id) {
+    const def = cgroups.value.find((g) => g.is_default) || cgroups.value[0]
+    if (def) addForm.value.concurrency_group_id = def.id
+  }
+}
+
 async function load() {
   loading.value = true
   const r = await api('/users')
@@ -42,7 +62,7 @@ async function load() {
   stats.value = r.data?.stats || stats.value
   loading.value = false
 }
-onMounted(load)
+onMounted(() => { load(); loadGroups() })
 
 const filtered = computed(() => {
   const q = search.value.trim().toLowerCase()
@@ -100,7 +120,8 @@ async function createUser() {
   const r = await api('/users', jsonBody('POST', addForm.value))
   if (r.ok) {
     showAdd.value = false
-    addForm.value = { email: '', name: '', password: '', role: 'user', credits: 0, notes: '' }
+    const def = cgroups.value.find((g) => g.is_default) || cgroups.value[0]
+    addForm.value = { email: '', name: '', password: '', role: 'user', credits: 0, notes: '', concurrency_group_id: def ? def.id : '' }
     flash('用户已创建')
     load()
   } else flash(r.data?.detail || '创建失败')
@@ -116,6 +137,7 @@ async function saveEdit() {
     credits: u.credits,
     role: u.role,
     notes: u.notes || '',
+    concurrency_group_id: u.concurrency_group_id || '',
   }
   if (u._newPassword) patch.password = u._newPassword
   const r = await api(`/users/${u.id}`, jsonBody('PATCH', patch))
@@ -246,6 +268,7 @@ async function quickCredits(u, delta) {
           <col class="w-40" />     <!-- username -->
           <col />                  <!-- email (flex) -->
           <col class="w-36" />     <!-- notes -->
+          <col class="w-28" />     <!-- concurrency -->
           <col class="w-20" />     <!-- role -->
           <col class="w-16" />     <!-- status switch -->
           <col class="w-24" />     <!-- credits -->
@@ -264,6 +287,7 @@ async function quickCredits(u, delta) {
             <th class="text-left px-5 py-3 font-medium">用户名</th>
             <th class="text-left px-3 py-3 font-medium">邮箱</th>
             <th class="text-left px-3 py-3 font-medium">备注</th>
+            <th class="text-left px-3 py-3 font-medium">并发</th>
             <th class="text-left px-3 py-3 font-medium">角色</th>
             <th class="text-left px-3 py-3 font-medium">状态</th>
             <th class="text-right px-3 py-3 font-medium">积分</th>
@@ -289,6 +313,9 @@ async function quickCredits(u, delta) {
             </td>
             <td class="px-3 py-3.5 align-middle text-xs truncate" :class="u.notes ? 'text-white/70' : 'text-white/25'" :title="u.notes || ''">
               {{ u.notes || '—' }}
+            </td>
+            <td class="px-3 py-3.5 align-middle text-xs truncate text-white/70" :title="cgroupLabel(u.concurrency_group_id)">
+              {{ cgroupLabel(u.concurrency_group_id) }}
             </td>
             <td class="px-3 py-3.5 align-middle">
               <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ring-1 whitespace-nowrap"
@@ -397,6 +424,10 @@ async function quickCredits(u, delta) {
             <SelectMenu v-model="addForm.role" :options="ROLE_OPTIONS" />
           </div>
           <div>
+            <label class="lbl">并发分组</label>
+            <SelectMenu v-model="addForm.concurrency_group_id" :options="cgroupOptions" placeholder="选择分组" />
+          </div>
+          <div>
             <label class="lbl">备注 <span class="text-white/35">(可选)</span></label>
             <textarea v-model="addForm.notes" rows="2" class="field resize-none" placeholder="给该用户加个备注,仅管理员可见"></textarea>
           </div>
@@ -443,6 +474,10 @@ async function quickCredits(u, delta) {
           <div>
             <label class="lbl">积分</label>
             <input v-model.number="editing.credits" type="number" min="0" step="1" class="field" />
+          </div>
+          <div>
+            <label class="lbl">并发分组 <span class="text-white/35">(限制同时生成数)</span></label>
+            <SelectMenu v-model="editing.concurrency_group_id" :options="cgroupOptions" placeholder="选择分组" />
           </div>
           <div>
             <label class="lbl">备注 <span class="text-white/35">(可选)</span></label>

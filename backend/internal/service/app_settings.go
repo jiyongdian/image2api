@@ -41,10 +41,11 @@ type SMTPSettings struct {
 }
 
 type CreditSettings struct {
-	CheckinEnabled bool `json:"checkin_enabled"`
-	CheckinReward  int  `json:"checkin_reward"`
-	InviteEnabled  bool `json:"invite_enabled"`
-	InviteReward   int  `json:"invite_reward"`
+	CheckinEnabled   bool `json:"checkin_enabled"`
+	CheckinReward    int  `json:"checkin_reward"`
+	InviteEnabled    bool `json:"invite_enabled"`
+	InviteReward     int  `json:"invite_reward"`
+	CDKRedeemEnabled bool `json:"cdk_redeem_enabled"`
 }
 
 type ProxySettings struct {
@@ -67,6 +68,75 @@ func NewAppSettingsService(settings *repo.SiteSettingRepository, events *repo.Ev
 		events:   events,
 		smtp:     smtp,
 		store:    store,
+	}
+}
+
+// UploadLogo stores a new site logo in object storage under branding/, deletes
+// the previously-uploaded one (if any), persists site.logo, and returns its URL.
+func (s *AppSettingsService) UploadLogo(ctx context.Context, data []byte, contentType string) (string, error) {
+	if s.store == nil || !s.store.Configured() {
+		return "", errors.New("对象存储未配置")
+	}
+	if len(data) == 0 {
+		return "", errors.New("空文件")
+	}
+	if len(data) > 4*1024*1024 {
+		return "", errors.New("logo 不能超过 4MB")
+	}
+	key := "branding/logo-" + randomUpper(10) + "." + logoExt(contentType)
+	if err := s.store.Put(ctx, key, data, contentType); err != nil {
+		return "", err
+	}
+	url := "/images/" + key
+	// Delete the previous uploaded logo (best-effort), then point site.logo at the new one.
+	if old, _ := s.settings.GetValue(ctx, "site.logo"); strings.HasPrefix(old, "/images/branding/") {
+		_ = s.store.Delete(ctx, strings.TrimPrefix(old, "/images/"))
+	}
+	if err := s.settings.UpsertValue(ctx, "site.logo", url); err != nil {
+		return "", err
+	}
+	return url, nil
+}
+
+// UploadAsset stores a public image (e.g. a 首页内容 底图) under branding/ and
+// returns its storage path (for form.image). Does NOT touch site settings.
+func (s *AppSettingsService) UploadAsset(ctx context.Context, data []byte, contentType string) (string, error) {
+	if s.store == nil || !s.store.Configured() {
+		return "", errors.New("对象存储未配置")
+	}
+	if len(data) == 0 {
+		return "", errors.New("空文件")
+	}
+	if len(data) > 8*1024*1024 {
+		return "", errors.New("图片不能超过 8MB")
+	}
+	key := "branding/sc-" + randomUpper(10) + "." + logoExt(contentType)
+	if err := s.store.Put(ctx, key, data, contentType); err != nil {
+		return "", err
+	}
+	return key, nil
+}
+
+// RemoveLogo deletes the uploaded logo and resets site.logo to the built-in default (empty).
+func (s *AppSettingsService) RemoveLogo(ctx context.Context) error {
+	if old, _ := s.settings.GetValue(ctx, "site.logo"); strings.HasPrefix(old, "/images/branding/") && s.store != nil {
+		_ = s.store.Delete(ctx, strings.TrimPrefix(old, "/images/"))
+	}
+	return s.settings.UpsertValue(ctx, "site.logo", "")
+}
+
+func logoExt(contentType string) string {
+	switch strings.ToLower(strings.TrimSpace(contentType)) {
+	case "image/jpeg", "image/jpg":
+		return "jpg"
+	case "image/webp":
+		return "webp"
+	case "image/svg+xml":
+		return "svg"
+	case "image/gif":
+		return "gif"
+	default:
+		return "png"
 	}
 }
 
@@ -281,11 +351,13 @@ func (s *AppSettingsService) Credits(ctx context.Context) (*CreditSettings, erro
 	if err != nil {
 		return nil, err
 	}
+	cdkRaw, _ := s.settings.GetValue(ctx, "credits.cdk_redeem_enabled")
 	return &CreditSettings{
-		CheckinEnabled: parseBoolSetting(checkinEnabledRaw, true),
-		CheckinReward:  parseIntSetting(checkinRewardRaw, 3),
-		InviteEnabled:  parseBoolSetting(inviteEnabledRaw, true),
-		InviteReward:   parseIntSetting(inviteRewardRaw, 3),
+		CheckinEnabled:   parseBoolSetting(checkinEnabledRaw, true),
+		CheckinReward:    parseIntSetting(checkinRewardRaw, 3),
+		InviteEnabled:    parseBoolSetting(inviteEnabledRaw, true),
+		InviteReward:     parseIntSetting(inviteRewardRaw, 3),
+		CDKRedeemEnabled: parseBoolSetting(cdkRaw, true),
 	}, nil
 }
 
@@ -297,10 +369,11 @@ func (s *AppSettingsService) SaveCredits(ctx context.Context, in CreditSettings)
 		in.InviteReward = 0
 	}
 	if err := s.settings.UpsertValues(ctx, map[string]string{
-		"credits.checkin_enabled": strconv.FormatBool(in.CheckinEnabled),
-		"credits.checkin_reward":  strconv.Itoa(in.CheckinReward),
-		"credits.invite_enabled":  strconv.FormatBool(in.InviteEnabled),
-		"credits.invite_reward":   strconv.Itoa(in.InviteReward),
+		"credits.checkin_enabled":   strconv.FormatBool(in.CheckinEnabled),
+		"credits.checkin_reward":    strconv.Itoa(in.CheckinReward),
+		"credits.invite_enabled":    strconv.FormatBool(in.InviteEnabled),
+		"credits.invite_reward":     strconv.Itoa(in.InviteReward),
+		"credits.cdk_redeem_enabled": strconv.FormatBool(in.CDKRedeemEnabled),
 	}); err != nil {
 		return nil, err
 	}

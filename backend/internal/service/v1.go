@@ -49,6 +49,9 @@ var (
 	// ErrConcurrencyFull — every eligible account is busy (each account runs at
 	// most ONE generation at a time). English message: surfaced to API / UI.
 	ErrConcurrencyFull = errors.New("all accounts are busy (1 concurrent job each), please try again shortly")
+	// ErrUserConcurrencyFull — the caller already has their concurrency-group's max
+	// generations in flight (画图台 + API key combined). 0 = unlimited.
+	ErrUserConcurrencyFull = errors.New("too many generations in progress, please wait for one to finish")
 	// ErrVideoJobNotFound / ErrVideoNotReady — /v1/videos async job lookups.
 	ErrVideoJobNotFound = errors.New("video job not found")
 	ErrVideoNotReady    = errors.New("video is not ready yet")
@@ -66,6 +69,7 @@ type V1Service struct {
 	events   *repo.EventRepository
 	tokens   *repo.TokenRepository
 	settings *repo.SiteSettingRepository
+	cgroups  *repo.ConcurrencyGroupRepository
 	adobe    *adobe.Client
 	chatgpt  *chatgpt.Client
 	runway   *runway.Client
@@ -93,48 +97,57 @@ type V1Service struct {
 	// for minutes and surface a late "success" on an already-abandoned event).
 	inflight *InflightRegistry
 
-	// gate enforces 1 concurrent generation PER account: a scheduler skips any
-	// account that's currently busy, and fails with ErrConcurrencyFull when every
-	// eligible account is occupied. In-memory (single process).
-	gate accountGate
+	// conc is the Redis-backed concurrency limiter for BOTH the per-account
+	// upstream gate (1+ jobs per account) and the per-user gate (画图台 + API key,
+	// capped by the user's concurrency group). Self-healing + fail-open.
+	conc *ConcurrencyService
 }
 
-// accountGate is a 1-slot-per-account in-flight gate. tryAcquire wins only if the
-// account isn't already running a generation; release frees it when done.
-type accountGate struct{ m sync.Map } // accountID -> struct{} held while busy
-
-// tryAcquireN wins if the account has fewer than max in-flight jobs, atomically
-// bumping its counter. max=1 is the default 1-job-per-account policy; some
-// providers (grok) allow more.
-func (g *accountGate) tryAcquireN(id string, max int) bool {
-	if id == "" {
-		return true
-	}
+// acctAcquire takes one per-account upstream slot (capped at max; 0/1 = single),
+// tagged with the generation's eventID (unique per job; a generation only ever
+// holds one slot on a given account at a time, so failover reuses it cleanly).
+func (s *V1Service) acctAcquire(ctx context.Context, accountID, eventID string, max int) bool {
 	if max < 1 {
 		max = 1
 	}
-	v, _ := g.m.LoadOrStore(id, new(int64))
-	cnt := v.(*int64)
-	for {
-		cur := atomic.LoadInt64(cnt)
-		if cur >= int64(max) {
-			return false
-		}
-		if atomic.CompareAndSwapInt64(cnt, cur, cur+1) {
-			return true
-		}
-	}
+	return s.conc.Acquire(ctx, "conc:a:"+accountID, max, eventID)
 }
 
-func (g *accountGate) tryAcquire(id string) bool { return g.tryAcquireN(id, 1) }
+func (s *V1Service) acctRelease(ctx context.Context, accountID, eventID string) {
+	s.conc.Release(ctx, "conc:a:"+accountID, eventID)
+}
 
-func (g *accountGate) release(id string) {
-	if id == "" {
-		return
+// userAcquire takes one per-user generation slot, capped by the user's
+// concurrency group (0 = unlimited). Returns false when the user is already at
+// their limit. `token` is a unique per-generation tag passed back to userRelease.
+func (s *V1Service) userAcquire(ctx context.Context, user *model.User, token string) bool {
+	if user == nil {
+		return true
 	}
-	if v, ok := g.m.Load(id); ok {
-		atomic.AddInt64(v.(*int64), -1)
+	return s.conc.Acquire(ctx, "conc:u:"+user.ID, s.userConcurrencyLimit(ctx, user), token)
+}
+
+func (s *V1Service) userRelease(ctx context.Context, userID, token string) {
+	s.conc.Release(ctx, "conc:u:"+userID, token)
+}
+
+// userConcurrencyLimit resolves the user's concurrency-group cap (0 = unlimited),
+// falling back to the default group when unset/missing.
+func (s *V1Service) userConcurrencyLimit(ctx context.Context, user *model.User) int {
+	if s.cgroups == nil || user == nil {
+		return 0
 	}
+	var g *model.ConcurrencyGroup
+	if user.ConcurrencyGroupID != "" {
+		g, _ = s.cgroups.Get(ctx, user.ConcurrencyGroupID)
+	}
+	if g == nil {
+		g, _ = s.cgroups.GetDefault(ctx)
+	}
+	if g == nil {
+		return 0
+	}
+	return g.MaxConcurrency
 }
 
 // InflightRegistry tracks the cancel func of every in-progress generation by
@@ -199,7 +212,7 @@ type V1VideoRequest struct {
 	BaseURL string
 }
 
-func NewV1Service(cfg *config.Config, models *repo.ModelRepository, users *repo.UserRepository, events *repo.EventRepository, tokens *repo.TokenRepository, settings *repo.SiteSettingRepository, adobeClient *adobe.Client, chatGPTClient *chatgpt.Client, runwayClient *runway.Client, leonardoClient *leonardo.Client, kreaClient *krea.Client, imagineClient *imagine.Client, grokClient *grok.Client, customClient *custom.Client, store *storage.Client) *V1Service {
+func NewV1Service(cfg *config.Config, models *repo.ModelRepository, users *repo.UserRepository, events *repo.EventRepository, tokens *repo.TokenRepository, settings *repo.SiteSettingRepository, cgroups *repo.ConcurrencyGroupRepository, conc *ConcurrencyService, adobeClient *adobe.Client, chatGPTClient *chatgpt.Client, runwayClient *runway.Client, leonardoClient *leonardo.Client, kreaClient *krea.Client, imagineClient *imagine.Client, grokClient *grok.Client, customClient *custom.Client, store *storage.Client) *V1Service {
 	return &V1Service{
 		cfg:      cfg,
 		models:   models,
@@ -207,6 +220,8 @@ func NewV1Service(cfg *config.Config, models *repo.ModelRepository, users *repo.
 		events:   events,
 		tokens:   tokens,
 		settings: settings,
+		cgroups:  cgroups,
+		conc:     conc,
 		adobe:    adobeClient,
 		chatgpt:  chatGPTClient,
 		runway:   runwayClient,
@@ -326,6 +341,16 @@ func (s *V1Service) prepareImageExecution(ctx context.Context, principal *APIPri
 	ctx = context.WithoutCancel(ctx)
 	genCtx, cancel := context.WithTimeout(ctx, 8*time.Minute)
 	defer cancel()
+
+	// Per-user concurrency gate (画图台 + API key combined). Admin model-tests are
+	// exempt. Held for the whole generation; released on return.
+	if source != "admin" && principal != nil && principal.User != nil {
+		slot := randomUpper(12)
+		if !s.userAcquire(ctx, principal.User, slot) {
+			return nil, ErrUserConcurrencyFull
+		}
+		defer s.userRelease(ctx, principal.User.ID, slot)
+	}
 
 	modelItem, resolution, aspectRatio, price, err := s.prepareImage(ctx, principal, in, charge)
 	if err != nil {
@@ -549,6 +574,15 @@ func (s *V1Service) prepareVideoExecution(ctx context.Context, principal *APIPri
 	ctx = context.WithoutCancel(ctx)
 	genCtx, cancel := context.WithTimeout(ctx, 12*time.Minute)
 	defer cancel()
+
+	// Per-user concurrency gate (画图台 + API key combined); admin tests exempt.
+	if source != "admin" && principal != nil && principal.User != nil {
+		slot := randomUpper(12)
+		if !s.userAcquire(ctx, principal.User, slot) {
+			return nil, ErrUserConcurrencyFull
+		}
+		defer s.userRelease(ctx, principal.User.ID, slot)
+	}
 
 	modelItem, resolution, aspectRatio, duration, price, err := s.prepareVideo(ctx, principal, in, charge)
 	if err != nil {
@@ -922,12 +956,11 @@ func (s *V1Service) prepareImage(ctx context.Context, principal *APIPrincipal, i
 	if err := ensureReferenceSizes(in.ReferenceImages); err != nil {
 		return nil, "", "", 0, err
 	}
+	// `size` (WxH) drives BOTH the aspect ratio AND the resolution tier — its long
+	// edge maps to a tier (<1800→1K, 1800–3499→2K, ≥3500→4K). The web path passes
+	// an explicit resolution; the OpenAI /v1 path derives it from size. There is no
+	// `quality` param — size is the single source of truth for resolution.
 	aspectRatio, resolution := parseImageSize(in.Size, in.AspectRatio, in.Resolution)
-	// Strict OpenAI path (/v1) sends no resolution — pick the tier from `quality`
-	// (low/medium/high/auto → 1K/2K/4K/default), clamped to the model's tiers.
-	if strings.TrimSpace(in.Resolution) == "" {
-		resolution = resolutionForQuality(modelItem, in.Quality)
-	}
 	// parseImageSize defaults a blank resolution to "2K" (OpenAI-size parity).
 	// For a model that doesn't price that tier — e.g. gpt-image-2 is 1K-only —
 	// fall back to its first supported tier so a missing/stale resolution from
@@ -1240,13 +1273,13 @@ func (s *V1Service) runPoolWithFailover(ctx context.Context, eventID, pool strin
 	tempDeadCount := 0
 	for _, token := range active {
 		// 1 concurrent job per account: skip any account already generating.
-		if !s.gate.tryAcquire(token.ID) {
+		if !s.acctAcquire(ctx, token.ID, eventID, 1) {
 			busy++
 			continue
 		}
 		// release via defer so a panic in tryAccount can't leak the 1-job slot.
 		data, err, failover, tempDead := func() ([]byte, error, bool, bool) {
-			defer s.gate.release(token.ID)
+			defer s.acctRelease(ctx, token.ID, eventID)
 			return s.tryAccount(ctx, eventID, pool, token, kind, attempt, classify, refreshOnAuth, tempAsDead)
 		}()
 		if err == nil {
@@ -1524,13 +1557,13 @@ func (s *V1Service) generateRunwayVideo(ctx context.Context, eventID string, mod
 	busy := 0
 	for _, token := range active {
 		// 1 concurrent job per account: skip any account already generating.
-		if !s.gate.tryAcquire(token.ID) {
+		if !s.acctAcquire(ctx, token.ID, eventID, 1) {
 			busy++
 			continue
 		}
 		var data []byte
 		done, failover := func() (bool, bool) {
-			defer s.gate.release(token.ID)
+			defer s.acctRelease(ctx, token.ID, eventID)
 			_ = s.events.SetAccount(ctx, eventID, token.ID)
 			_ = s.tokens.TouchLastUsed(ctx, token.ID)
 			teamID := ""
@@ -1663,13 +1696,13 @@ func (s *V1Service) generateCustomImage(ctx context.Context, eventID string, mod
 	var lastErr error
 	busy := 0
 	for _, token := range active {
-		if !s.gate.tryAcquireN(token.ID, accountConcurrency(token)) {
+		if !s.acctAcquire(ctx, token.ID, eventID, accountConcurrency(token)) {
 			busy++
 			continue
 		}
 		var data []byte
 		done, failover := func() (bool, bool) {
-			defer s.gate.release(token.ID)
+			defer s.acctRelease(ctx, token.ID, eventID)
 			_ = s.events.SetAccount(ctx, eventID, token.ID)
 			_ = s.tokens.TouchLastUsed(ctx, token.ID)
 			baseURL := stringValue(token.Meta["base_url"])
@@ -1730,13 +1763,13 @@ func (s *V1Service) generateCustomVideo(ctx context.Context, eventID string, mod
 	var videoURL string
 	busy := 0
 	for _, token := range active {
-		if !s.gate.tryAcquireN(token.ID, accountConcurrency(token)) {
+		if !s.acctAcquire(ctx, token.ID, eventID, accountConcurrency(token)) {
 			busy++
 			continue
 		}
 		var data []byte
 		done, failover := func() (bool, bool) {
-			defer s.gate.release(token.ID)
+			defer s.acctRelease(ctx, token.ID, eventID)
 			_ = s.events.SetAccount(ctx, eventID, token.ID)
 			_ = s.tokens.TouchLastUsed(ctx, token.ID)
 			baseURL := stringValue(token.Meta["base_url"])
@@ -1869,13 +1902,13 @@ func (s *V1Service) generateGrokVideo(ctx context.Context, eventID string, model
 	for _, token := range active {
 		// grok allows 10 concurrent jobs per account (unlike the 1-per-account
 		// default of the other pools).
-		if !s.gate.tryAcquireN(token.ID, grokConcurrencyPerAccount) {
+		if !s.acctAcquire(ctx, token.ID, eventID, grokConcurrencyPerAccount) {
 			busy++
 			continue
 		}
 		var data []byte
 		done, failover := func() (bool, bool) {
-			defer s.gate.release(token.ID)
+			defer s.acctRelease(ctx, token.ID, eventID)
 			_ = s.events.SetAccount(ctx, eventID, token.ID)
 			_ = s.tokens.TouchLastUsed(ctx, token.ID)
 			d, meta, genErr := s.grok.GenerateVideo(ctx, token.Value, in.Prompt, aspectRatio, res, durationSeconds, frames, downloadResult)
@@ -1970,13 +2003,13 @@ func (s *V1Service) generateRunwayImage(ctx context.Context, eventID string, mod
 	busy := 0
 	for _, token := range active {
 		// 1 concurrent job per account: skip any account already generating.
-		if !s.gate.tryAcquire(token.ID) {
+		if !s.acctAcquire(ctx, token.ID, eventID, 1) {
 			busy++
 			continue
 		}
 		var data []byte
 		done, failover := func() (bool, bool) {
-			defer s.gate.release(token.ID)
+			defer s.acctRelease(ctx, token.ID, eventID)
 			_ = s.events.SetAccount(ctx, eventID, token.ID)
 			_ = s.tokens.TouchLastUsed(ctx, token.ID)
 			teamID := ""
@@ -2571,7 +2604,14 @@ func guessRatio(w, h int) string {
 		W int
 		H int
 	}
-	candidates := []candidate{{1, 1}, {16, 9}, {9, 16}, {4, 3}, {3, 4}, {4, 1}, {1, 4}, {8, 1}, {1, 8}}
+	// The 14 ratios actually used across our models. Must stay in sync with the
+	// custom-model picker (CustomModelModal RATIO_OPTS) and the docs 对照表, so a
+	// /v1 `size` maps to exactly one of them.
+	candidates := []candidate{
+		{1, 1},
+		{5, 4}, {4, 3}, {3, 2}, {16, 9}, {2, 1}, {21, 9}, {3, 1}, // 横
+		{4, 5}, {3, 4}, {2, 3}, {9, 16}, {9, 21}, {1, 3}, // 竖
+	}
 	best := candidates[0]
 	bestDelta := absFloat(float64(w)/float64(h) - float64(best.W)/float64(best.H))
 	for _, item := range candidates[1:] {

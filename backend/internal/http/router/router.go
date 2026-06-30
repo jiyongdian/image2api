@@ -25,6 +25,7 @@ type Handlers struct {
 	UserTools     *handler.UserToolsHandler
 	UserGen       *handler.UserGenerationHandler
 	ProviderAdmin *handler.ProviderAdminHandler
+	ConcGroups    *handler.ConcurrencyGroupHandler
 }
 
 func New(cfg *config.Config, auth *service.AuthService, handlers Handlers) *gin.Engine {
@@ -96,6 +97,11 @@ func New(cfg *config.Config, auth *service.AuthService, handlers Handlers) *gin.
 		authed.POST("/users/:user_id/credits", handlers.AdminWrite.AdjustUserCredits)
 		authed.POST("/users/:user_id/api-keys", handlers.AdminWrite.CreateUserAPIKey)
 		authed.DELETE("/users/:user_id/api-keys/:key_id", handlers.AdminWrite.DeleteUserAPIKey)
+		authed.GET("/concurrency-groups", handlers.ConcGroups.List)
+		authed.POST("/concurrency-groups", handlers.ConcGroups.Create)
+		authed.PATCH("/concurrency-groups/:id", handlers.ConcGroups.Update)
+		authed.POST("/concurrency-groups/:id/default", handlers.ConcGroups.SetDefault)
+		authed.DELETE("/concurrency-groups/:id", handlers.ConcGroups.Delete)
 		authed.GET("/cdks", handlers.CDK.List)
 		authed.POST("/cdks", handlers.CDK.Create)
 		authed.POST("/cdks/delete-bulk", handlers.CDK.DeleteBulk)
@@ -135,6 +141,9 @@ func New(cfg *config.Config, auth *service.AuthService, handlers Handlers) *gin.
 		{
 			settings.GET("/site", handlers.SiteSettings.Get)
 			settings.PUT("/site", handlers.SiteSettings.Put)
+			settings.POST("/logo", handlers.AppSettings.LogoUpload)
+			settings.DELETE("/logo", handlers.AppSettings.LogoDelete)
+			settings.POST("/asset", handlers.AppSettings.AssetUpload)
 			settings.GET("/registration", handlers.AppSettings.RegistrationGet)
 			settings.PUT("/registration", handlers.AppSettings.RegistrationPut)
 			settings.GET("/smtp", handlers.AppSettings.SMTPGet)

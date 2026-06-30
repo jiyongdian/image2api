@@ -238,6 +238,14 @@ func (m *MaintenanceService) pruneMedia(ctx context.Context) {
 			pinned = nil
 		}
 	}
+	// The site logo is permanent too — pin it like a showcase image so the
+	// retention sweep never deletes it. site.logo is "/images/<key>".
+	if logo, _ := m.settings.GetValue(ctx, "site.logo"); strings.TrimSpace(logo) != "" {
+		if pinned == nil {
+			pinned = map[string]struct{}{}
+		}
+		pinned[strings.TrimPrefix(strings.TrimLeft(logo, "/"), "images/")] = struct{}{}
+	}
 	removed, skipped := 0, 0
 	var clearedKeys []string
 	for _, o := range objs {

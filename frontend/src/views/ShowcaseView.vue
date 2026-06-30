@@ -141,6 +141,28 @@ function pickImage(file) {
   picking.value = false
 }
 
+// Upload a NEW image as 底图 — click/drag the preview. Stored public under
+// branding/ in RustFS; form.image is set to the returned path immediately.
+const scImgInput = ref(null)
+const scDragOver = ref(false)
+const uploadingImg = ref(false)
+function pickShowcaseImg() { scImgInput.value && scImgInput.value.click() }
+async function uploadShowcaseImg(f) {
+  if (!f || !f.type || !f.type.startsWith('image/')) return
+  if (f.size > 8 * 1024 * 1024) { error.value = '图片不能超过 8MB'; return }
+  uploadingImg.value = true; error.value = ''
+  const dataUrl = await new Promise((res, rej) => {
+    const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(f)
+  }).catch(() => '')
+  if (!dataUrl) { uploadingImg.value = false; error.value = '读取图片失败'; return }
+  const r = await api('/settings/asset', jsonBody('POST', { data: dataUrl }))
+  uploadingImg.value = false
+  if (r.ok && r.data?.path) form.image = r.data.path
+  else error.value = r.data?.detail || '上传失败'
+}
+function onScImgInput(ev) { uploadShowcaseImg((ev.target.files || [])[0]); if (ev.target) ev.target.value = '' }
+function onScDrop(ev) { ev.preventDefault(); scDragOver.value = false; uploadShowcaseImg((ev.dataTransfer?.files || [])[0]) }
+
 function bgFor(image) {
   if (!image) return {}
   const src = /^https?:\/\//i.test(image) ? image : generatedUrl(image)
@@ -240,19 +262,30 @@ onMounted(refresh)
           </div>
 
           <div class="p-5 space-y-4">
-            <!-- live preview -->
-            <div class="relative rounded-2xl overflow-hidden ring-1 ring-white/10 aspect-[5/2] bg-white/[0.04]"
-                 :style="bgFor(form.image)">
+            <!-- live preview — click or drag an image here to upload as 底图 -->
+            <div class="relative rounded-2xl overflow-hidden ring-1 ring-white/10 aspect-[5/2] bg-white/[0.04] cursor-pointer transition-all"
+                 :class="scDragOver ? 'ring-2 ring-indigo-400' : ''"
+                 :style="bgFor(form.image)"
+                 @click="pickShowcaseImg" @drop="onScDrop" @dragover.prevent="scDragOver = true" @dragleave="scDragOver = false">
               <div class="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent"></div>
-              <div v-if="!form.image" class="absolute inset-0 grid place-items-center text-xs text-white/40">
-                未选择底图
+              <button type="button" @click.stop="openPicker"
+                      class="absolute top-2 right-2 z-10 inline-flex items-center gap-1 rounded-lg bg-black/55 ring-1 ring-white/15 hover:bg-black/75 text-white text-[11px] px-2.5 py-1.5 transition-colors">
+                <Icon name="files" class="w-3.5 h-3.5" /> 选择已生成
+              </button>
+              <div v-if="!form.image" class="absolute inset-0 grid place-items-center text-xs text-white/60">
+                <div class="text-center">
+                  <Icon name="plus" class="w-6 h-6 mx-auto mb-1 opacity-80" />
+                  {{ uploadingImg ? '上传中…' : '点击或拖拽图片上传底图' }}
+                </div>
               </div>
-              <div class="absolute inset-x-0 bottom-0 p-5">
+              <div v-else-if="uploadingImg" class="absolute inset-0 grid place-items-center bg-black/40 text-xs text-white">上传中…</div>
+              <div class="absolute inset-x-0 bottom-0 p-5 pointer-events-none">
                 <div v-if="form.subtitle" class="text-[10px] uppercase tracking-[0.3em] text-white/55">{{ form.subtitle }}</div>
                 <div v-if="form.title" class="text-xl font-bold text-white mt-1">{{ form.title }}</div>
                 <div v-if="form.prompt" class="text-xs text-white/65 mt-1 line-clamp-2">{{ form.prompt }}</div>
               </div>
             </div>
+            <input ref="scImgInput" type="file" accept="image/*" class="hidden" @change="onScImgInput" />
 
             <div class="grid sm:grid-cols-2 gap-3">
               <div>
@@ -267,17 +300,6 @@ onMounted(refresh)
                 <label class="block text-xs text-[color:var(--fg-3)] mb-1.5">权重 <span class="text-[color:var(--fg-faint)]">(越大越靠前)</span></label>
                 <input v-model.number="form.weight" type="number" class="field" />
               </div>
-            </div>
-
-            <!-- image picker (the central change — admins pick a real image) -->
-            <div>
-              <label class="block text-xs text-[color:var(--fg-3)] mb-1.5">底图</label>
-              <div class="flex gap-2">
-                <input v-model="form.image" class="field font-mono text-[11px]"
-                       placeholder="user/abc.png 或 https://…" />
-                <button type="button" @click="openPicker" class="btn-soft shrink-0">选择已生成</button>
-              </div>
-              <p class="text-[11px] text-[color:var(--fg-faint)] mt-1">填写 /generated 下的相对路径,或粘贴一个外链 URL。</p>
             </div>
 
             <template v-if="form.kind !== 'work'">

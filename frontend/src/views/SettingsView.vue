@@ -97,6 +97,13 @@ async function changePwd() {
 // ---- Credits: the REAL server-side balance of the logged-in user ----
 // (admin adjustments in 用户管理 write this same field). Top-up is via CDK.
 const balance = computed(() => Number(auth.user?.credits || 0))
+const roleLabel = computed(() => ({ user: '普通用户', agent: '代理', admin: '管理员' }[auth.user?.role] || '普通用户'))
+const concurrencyLabel = computed(() => {
+  const n = Number(auth.user?.concurrency_limit || 0)
+  const g = auth.user?.concurrency_group
+  if (n <= 0) return g ? `不限制 · ${g}` : '不限制'
+  return g ? `${n} · ${g}` : String(n)
+})
 
 const cdkCode = ref('')
 const cdkBusy = ref(false)
@@ -183,6 +190,36 @@ function toast(m) {
         <Icon name="close" class="w-3.5 h-3.5" /> 退出登录
       </button>
     </header>
+
+    <!-- ===== Account info ===== -->
+    <section class="card p-6">
+      <div class="flex items-center gap-2 mb-4">
+        <Icon name="accounts" class="w-4 h-4 text-violet-300" />
+        <h2 class="text-sm font-semibold">账户信息</h2>
+      </div>
+      <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 text-sm">
+        <div>
+          <div class="text-[11px] text-white/40 uppercase tracking-wider mb-1">用户名</div>
+          <div class="text-white/90 font-medium truncate" :title="auth.user?.name || ''">{{ auth.user?.name || '—' }}</div>
+        </div>
+        <div class="col-span-2 lg:col-span-1">
+          <div class="text-[11px] text-white/40 uppercase tracking-wider mb-1">绑定邮箱</div>
+          <div class="text-white/90 font-mono text-xs break-all" :title="auth.user?.email || ''">{{ auth.user?.email || '—' }}</div>
+        </div>
+        <div>
+          <div class="text-[11px] text-white/40 uppercase tracking-wider mb-1">角色</div>
+          <div class="text-white/90">{{ roleLabel }}</div>
+        </div>
+        <div>
+          <div class="text-[11px] text-white/40 uppercase tracking-wider mb-1">积分余额</div>
+          <div class="text-amber-300 font-semibold tabular-nums">{{ pointsLabel(balance) }}</div>
+        </div>
+        <div>
+          <div class="text-[11px] text-white/40 uppercase tracking-wider mb-1">并发上限</div>
+          <div class="text-white/90 truncate" :title="concurrencyLabel">{{ concurrencyLabel }}</div>
+        </div>
+      </div>
+    </section>
 
     <!-- ===== Two-column grid ===== -->
     <div class="grid lg:grid-cols-2 gap-5">
@@ -280,8 +317,8 @@ function toast(m) {
         </button>
       </section>
 
-      <!-- CDK REDEEM -->
-      <section class="relative card p-7 md:p-8 overflow-hidden">
+      <!-- CDK REDEEM — hidden when the admin turns the 兑换码 switch off -->
+      <section v-if="site.cdkRedeemEnabled" class="relative card p-7 md:p-8 overflow-hidden">
         <div class="inline-grid w-10 h-10 rounded-xl bg-emerald-500/15 ring-1 ring-emerald-400/30 grid place-items-center text-emerald-300">
           <Icon name="spark" class="w-4 h-4" />
         </div>

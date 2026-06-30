@@ -43,15 +43,13 @@ function priceOf(m) {
 const imageParams = [
   ['model', 'string', '必填', '模型 id,见上表(图像)'],
   ['prompt', 'string', '必填', '文字描述'],
-  ['size', 'string', '可选', '"1024x1024" / "1536x1024" / "1024x1536" / "auto" → 决定比例'],
-  ['quality', 'string', '可选', '"low"|"medium"|"high"|"auto" → 画质档 1K/2K/4K(钳到模型支持档)'],
+  ['size', 'string', '可选', '宽x高,如 "1024x1024"。同时决定「比例」+「分辨率档」(按长边)。具体怎么填见下方对照表;留空 = 1:1 · 2K'],
 ]
 const editParams = [
   ['image', 'file', '必填', '输入图;多张参考图重复 image[] 字段(multipart 文件上传)'],
   ['prompt', 'string', '必填', '编辑/参考描述'],
   ['model', 'string', '必填', '模型 id(需支持图生图)'],
-  ['size', 'string', '可选', '同图像:决定比例'],
-  ['quality', 'string', '可选', '同图像:决定画质档'],
+  ['size', 'string', '可选', '同图像:决定比例 + 分辨率档(见下方对照表)'],
 ]
 const videoParams = [
   ['model', 'string', '必填', '模型 id,见上表(视频)'],
@@ -59,6 +57,25 @@ const videoParams = [
   ['seconds', 'string|int', '必填', '时长秒数,如 "5" "8"(取决于模型支持)'],
   ['size', 'string', '可选', '如 "1280x720" / "720x1280" → 决定比例与分辨率'],
   ['input_reference', 'file', '可选', '首帧/参考图(multipart 文件;runway 图生视频必填 1 张)'],
+]
+
+// ---- size → 比例 × 分辨率档 对照表(用 size 该传的值)----
+// size 的长边映射档位:<1800→1K · 1800–3499→2K · ≥3500→4K;宽高比映射比例。
+const sizeTable = [
+  { ratio: '1:1 · 方',   k1: '1024x1024', k2: '2048x2048', k4: '4096x4096' },
+  { ratio: '5:4 · 横',   k1: '1280x1024', k2: '2560x2048', k4: '3840x3072' },
+  { ratio: '4:3 · 横',   k1: '1024x768',  k2: '2048x1536', k4: '4096x3072' },
+  { ratio: '3:2 · 横',   k1: '1200x800',  k2: '2400x1600', k4: '3600x2400' },
+  { ratio: '16:9 · 横',  k1: '1280x720',  k2: '2048x1152', k4: '4096x2304' },
+  { ratio: '2:1 · 横',   k1: '1440x720',  k2: '2880x1440', k4: '4096x2048' },
+  { ratio: '21:9 · 超宽', k1: '1680x720',  k2: '2520x1080', k4: '5040x2160' },
+  { ratio: '3:1 · 超宽',  k1: '1536x512',  k2: '2304x768',  k4: '3840x1280' },
+  { ratio: '4:5 · 竖',   k1: '1024x1280', k2: '2048x2560', k4: '3072x3840' },
+  { ratio: '3:4 · 竖',   k1: '768x1024',  k2: '1536x2048', k4: '3072x4096' },
+  { ratio: '2:3 · 竖',   k1: '800x1200',  k2: '1600x2400', k4: '2400x3600' },
+  { ratio: '9:16 · 竖',  k1: '720x1280',  k2: '1152x2048', k4: '2304x4096' },
+  { ratio: '9:21 · 竖超宽', k1: '720x1680', k2: '1080x2520', k4: '2160x5040' },
+  { ratio: '1:3 · 竖',   k1: '512x1536',  k2: '768x2304',  k4: '1280x3840' },
 ]
 
 // ---- examples (built in script so refs resolve correctly) ----
@@ -72,8 +89,7 @@ const examples = computed(() => [
   -d '{
     "model": "${sampleImage.value}",
     "prompt": "a corgi running in a golden wheat field, cinematic",
-    "size": "1024x1024",
-    "quality": "high"
+    "size": "2048x2048"
   }'`,
   },
   {
@@ -87,8 +103,7 @@ client = OpenAI(api_key="${keyHint.value}", base_url="${base.value}/v1")
 resp = client.images.generate(
     model="${sampleImage.value}",
     prompt="a corgi running in a golden wheat field, cinematic",
-    size="1024x1024",
-    quality="high",
+    size="2048x2048",   # 2K · 1:1,见下方对照表
 )
 # 结果是 base64(无 URL)
 with open("out.png", "wb") as f:
@@ -101,7 +116,7 @@ with open("out.png", "wb") as f:
   -H "Authorization: Bearer ${keyHint.value}" \\
   -F model="${sampleImage.value}" \\
   -F prompt="把这张图改成赛博朋克风格" \\
-  -F quality="high" \\
+  -F size="2048x2048" \\
   -F image=@input.png
 # 多张参考图:重复 -F image=@a.png -F image=@b.png`,
   },
@@ -314,6 +329,38 @@ async function copy(text) {
       </div>
     </section>
 
+    <!-- size 对照表(课时表)—— 解决"传错分辨率" -->
+    <section>
+      <h2 class="text-lg font-semibold mb-1">分辨率对照表 · <code class="text-white/70 text-sm">size</code> 该传什么</h2>
+      <p class="text-xs text-white/45 mb-3">
+        左边选比例,上面选分辨率档,交叉格里就是 <code class="text-white/70">size</code> 要传的值(直接复制)。
+        没有 <code class="text-white/70">quality</code> 参数,分辨率只看 <code class="text-white/70">size</code> 的长边。
+        档位必须是该模型支持的(见上方「可用模型」的分辨率列),不支持会自动回退到该模型最低档。
+      </p>
+      <div class="card overflow-hidden">
+        <table class="w-full text-sm">
+          <thead><tr class="text-left text-[11px] uppercase tracking-wider text-white/40 border-b border-white/[0.08]">
+            <th class="px-4 py-2.5 font-medium">比例</th>
+            <th class="px-4 py-2.5 font-medium">1K</th>
+            <th class="px-4 py-2.5 font-medium">2K</th>
+            <th class="px-4 py-2.5 font-medium">4K</th>
+          </tr></thead>
+          <tbody>
+            <tr v-for="row in sizeTable" :key="row.ratio" class="border-b border-white/[0.04] last:border-0">
+              <td class="px-4 py-2.5 text-white/75">{{ row.ratio }}</td>
+              <td class="px-4 py-2.5 font-mono text-white/85">{{ row.k1 }}</td>
+              <td class="px-4 py-2.5 font-mono text-white/85">{{ row.k2 }}</td>
+              <td class="px-4 py-2.5 font-mono text-white/85">{{ row.k4 }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="text-xs text-white/40 mt-2">
+        例:想要 <strong class="text-white/70">2K 的 16:9 横图</strong> → <code class="text-white/70">"size": "2048x1152"</code>。
+        留空 size = 默认 <strong class="text-white/70">1:1 · 2K</strong>。
+      </p>
+    </section>
+
     <!-- examples -->
     <section class="space-y-4">
       <h2 class="text-lg font-semibold">调用示例</h2>
@@ -340,7 +387,7 @@ async function copy(text) {
           <li>完成后 <code class="text-white/85 font-mono">GET /v1/videos/{id}/content</code> 返回 <strong class="text-white/90">mp4 原始二进制</strong>(非 base64、非 URL)</li>
         </ol>
         <p><strong class="text-white/90">计费(预扣)</strong>:生成<strong class="text-white/90">前</strong>按上表价格从你的 Key 账号预扣积分;图像或视频上游失败会自动退回 —— 失败不扣费。</p>
-        <p><strong class="text-white/90">参数映射</strong>:<code class="text-white/70">size</code>→比例,<code class="text-white/70">quality</code>(low/medium/high)→画质档(1K/2K/4K,钳到模型支持档),<code class="text-white/70">seconds</code>→视频时长。参数须落在该模型定价表内,否则 400;余额不足 402。</p>
+        <p><strong class="text-white/90">参数映射</strong>:<code class="text-white/70">size</code>(宽x高)同时决定<strong class="text-white/90">比例 + 分辨率档</strong>(长边:&lt;1800→1K · 1800–3499→2K · ≥3500→4K),<code class="text-white/70">seconds</code>→视频时长。<strong class="text-white/90">没有 quality 参数</strong>,分辨率只看 size。档位须是该模型支持的(不支持会回退到该模型最低档);参数须落在定价表内否则 400,余额不足 402。</p>
         <div class="pt-2 grid sm:grid-cols-2 gap-2 text-xs">
           <div class="flex items-center gap-2"><span class="badge-err">401</span> Key 无效 / 上游需重新授权</div>
           <div class="flex items-center gap-2"><span class="badge-err">404</span> 未知 model / 视频任务不存在</div>

@@ -20,6 +20,7 @@ import OverviewView from './views/OverviewView.vue'
 import ModelsView from './views/ModelsView.vue'
 import AccountsView from './views/AccountsView.vue'
 import UsersView from './views/UsersView.vue'
+import ConcurrencyView from './views/ConcurrencyView.vue'
 import CdksView from './views/CdksView.vue'
 import InvitesAdminView from './views/InvitesAdminView.vue'
 import ImagesView from './views/ImagesView.vue'
@@ -51,6 +52,7 @@ const routes = [
       { path: 'models',   component: ModelsView,   meta: { label: '模型管理' } },
       { path: 'accounts', component: AccountsView, meta: { label: '账号管理' } },
       { path: 'users',    component: UsersView,    meta: { label: '用户管理' } },
+      { path: 'concurrency', component: ConcurrencyView, meta: { label: '并发分组' } },
       { path: 'cdks',     component: CdksView,     meta: { label: '兑换码' } },
       { path: 'invites',  component: InvitesAdminView, meta: { label: '邀请日志' } },
       { path: 'images',   component: ImagesView,   meta: { label: '图片管理' } },

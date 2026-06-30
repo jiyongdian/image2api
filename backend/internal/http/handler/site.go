@@ -23,9 +23,10 @@ func (h *SiteHandler) Public(c *gin.Context) {
 	}
 	ctx := c.Request.Context()
 	c.JSON(http.StatusOK, gin.H{
-		"title":    title,
-		"logo":     h.site.Logo(ctx),
-		"subtitle": h.site.Subtitle(ctx),
-		"contact":  h.site.Contact(ctx),
+		"title":              title,
+		"logo":               h.site.Logo(ctx),
+		"subtitle":           h.site.Subtitle(ctx),
+		"cdk_redeem_enabled": h.site.CDKRedeemEnabled(ctx),
+		"contact":            h.site.Contact(ctx),
 	})
 }

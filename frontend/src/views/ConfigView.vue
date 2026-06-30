@@ -1,8 +1,9 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { api, jsonBody } from '../api'
-import { site } from '../site'
+import { site, applyFavicon } from '../site'
 import TagInput from '../components/TagInput.vue'
+import Logo from '../components/Logo.vue'
 
 // ---- logs (retention window) ----
 const logsCfg = reactive({ retention_days: 30 })
@@ -37,6 +38,9 @@ async function saveMedia() {
 }
 
 // ---- site (branding shown across the app) ----
+// Default homepage 子标题 — shown on the home Hero when unset, and pre-filled
+// into the input so the admin edits from it (same idea as 标题 defaulting to Vivid).
+const DEFAULT_SUBTITLE = '把脑海里的画面写成一句话,GPT、Gemini、Firefly、Flux 等顶级模型替你变成图像与视频。'
 const siteForm = reactive({ title: '', logo: '', subtitle: '', qq: '', qq_link: '', qq_group: '', qq_group_link: '', email: '', shop: '' })
 const siteBusy = ref(false); const siteSaved = ref(false)
 async function loadSite() {
@@ -44,7 +48,7 @@ async function loadSite() {
   if (r.ok && r.data) {
     siteForm.title = r.data.title || ''
     siteForm.logo = r.data.logo || ''
-    siteForm.subtitle = r.data.subtitle || ''
+    siteForm.subtitle = r.data.subtitle || DEFAULT_SUBTITLE
     const c = r.data.contact || {}
     siteForm.qq = c.qq || ''; siteForm.qq_link = c.qq_link || ''
     siteForm.qq_group = c.qq_group || ''
@@ -52,27 +56,53 @@ async function loadSite() {
     siteForm.email = c.email || ''; siteForm.shop = c.shop || ''
   }
 }
+// ---- logo (drag/click to stage; uploaded to RustFS only on 保存) ----
+const logoStaged = ref('')      // dataUrl of a newly picked logo, pending save
+const logoRemove = ref(false)   // true → delete logo on save (back to default)
+const logoDragOver = ref(false)
+const logoInput = ref(null)
+// What the preview shows: staged file > (removed → none) > current saved logo.
+const logoPreview = computed(() => logoStaged.value || (logoRemove.value ? '' : (siteForm.logo || '')))
+function pickLogo() { logoInput.value && logoInput.value.click() }
+function readLogo(f) {
+  if (!f || !f.type || !f.type.startsWith('image/')) return
+  if (f.size > 4 * 1024 * 1024) { flashSite('logo 不能超过 4MB'); return }
+  const reader = new FileReader()
+  reader.onload = () => { logoStaged.value = reader.result; logoRemove.value = false }
+  reader.readAsDataURL(f)
+}
+function onLogoInput(ev) { readLogo((ev.target.files || [])[0]); if (ev.target) ev.target.value = '' }
+function onLogoDrop(ev) { ev.preventDefault(); logoDragOver.value = false; readLogo((ev.dataTransfer?.files || [])[0]) }
+function clearLogo() { logoStaged.value = ''; logoRemove.value = true }  // 恢复默认
+const siteErr = ref('')
+function flashSite(msg) { siteErr.value = msg; setTimeout(() => (siteErr.value = ''), 2500) }
+
 async function saveSite() {
-  siteBusy.value = true; siteSaved.value = false
+  siteBusy.value = true; siteSaved.value = false; siteErr.value = ''
+  // 1) logo first — upload the staged file (or delete) to RustFS, only on 保存.
+  if (logoStaged.value) {
+    const lr = await api('/settings/logo', jsonBody('POST', { data: logoStaged.value }))
+    if (lr.ok && lr.data?.logo != null) { siteForm.logo = lr.data.logo; site.logo = lr.data.logo; applyFavicon(site.logo); logoStaged.value = '' }
+    else { siteBusy.value = false; flashSite(lr.data?.detail || 'Logo 上传失败'); return }
+  } else if (logoRemove.value) {
+    await api('/settings/logo', { method: 'DELETE' })
+    siteForm.logo = ''; site.logo = ''; applyFavicon(''); logoRemove.value = false
+  }
+  // 2) the rest of the site form (logo is managed above, not sent here).
   const r = await api('/settings/site', jsonBody('PUT', {
     title: siteForm.title,
-    logo: siteForm.logo,
     subtitle: siteForm.subtitle,
     contact: { qq: siteForm.qq, qq_link: siteForm.qq_link, qq_group: siteForm.qq_group, qq_group_link: siteForm.qq_group_link, email: siteForm.email, shop: siteForm.shop },
   }))
   siteBusy.value = false
   if (r.ok && r.data) {
-    site.logo = r.data.data?.logo ?? siteForm.logo.trim()
     site.subtitle = r.data.data?.subtitle ?? siteForm.subtitle.trim()
-    // Mirror the change into the shared `site` store so every header /
-    // wordmark / tab title updates without a reload. The PUT response is
-    // nested ({ ok, data: { title } }) unlike the flat GET, so read the
-    // saved value from there — falling back to the input we just submitted.
+    // Mirror into the shared `site` store so headers / wordmark update without a reload.
     site.title = r.data.data?.title || siteForm.title.trim()
     site.contact = r.data.data?.contact || site.contact
     siteSaved.value = true
     setTimeout(() => (siteSaved.value = false), 2000)
-  }
+  } else flashSite(r.data?.detail || '保存失败')
 }
 
 // ---- registration ----
@@ -87,7 +117,7 @@ const smtp = reactive({ host: '', port: 587, username: '', password: '', from_ad
 const smtpBusy = ref(false); const smtpSaved = ref(false)
 
 // ---- rewards ----
-const credits = reactive({ checkin_enabled: true, checkin_reward: 3, invite_enabled: true, invite_reward: 3 })
+const credits = reactive({ checkin_enabled: true, checkin_reward: 3, invite_enabled: true, invite_reward: 3, cdk_redeem_enabled: true })
 const credBusy = ref(false); const credSaved = ref(false)
 
 // ---- proxy (carried when calling upstream during generation) ----
@@ -197,6 +227,7 @@ async function saveCredits() {
     checkin_reward: Number(credits.checkin_reward) || 0,
     invite_enabled: credits.invite_enabled,
     invite_reward: Number(credits.invite_reward) || 0,
+    cdk_redeem_enabled: credits.cdk_redeem_enabled,
   }))
   credBusy.value = false
   if (r.ok) { credSaved.value = true; setTimeout(() => (credSaved.value = false), 2000) }
@@ -218,13 +249,23 @@ onMounted(() => { loadSite(); loadReg(); loadSmtp(); loadCredits(); loadProxy();
           <span><span class="lbl">网页主标题</span><span class="hint">显示在浏览器标签、首页 Logo、侧栏和登录卡上。未设置时默认显示 "Vivid"。</span></span>
           <input v-model="siteForm.title" placeholder="Vivid" class="txt" />
         </label>
+        <div class="row">
+          <span><span class="lbl">Logo</span><span class="hint">侧栏 / 公开页头部 / 浏览器标签的 Logo。点击或拖拽图片到下图替换,点「保存设置」后才上传到存储(替换会自动删旧图)。下图当前显示的就是默认 Logo。</span></span>
+          <div class="flex items-center gap-3">
+            <div @click="pickLogo" @drop="onLogoDrop" @dragover.prevent="logoDragOver = true" @dragleave="logoDragOver = false"
+                 title="点击或拖拽图片替换"
+                 class="w-16 h-16 rounded-xl grid place-items-center overflow-hidden shrink-0 cursor-pointer transition-all"
+                 :class="logoDragOver ? 'ring-2 ring-indigo-400 bg-indigo-50/40' : ''">
+              <img v-if="logoPreview" :src="logoPreview" class="w-full h-full object-cover" />
+              <Logo v-else :size="64" class="w-full h-full" />
+            </div>
+            <input ref="logoInput" type="file" accept="image/*" class="hidden" @change="onLogoInput" />
+          </div>
+        </div>
+        <p v-if="siteErr" class="text-xs text-rose-500 -mt-1">{{ siteErr }}</p>
         <label class="row">
-          <span><span class="lbl">Logo 图片地址</span><span class="hint">侧栏 / 公开页头部显示的 Logo 图片 URL。留空则用文字主标题。</span></span>
-          <input v-model="siteForm.logo" placeholder="https://.../logo.png" class="txt" />
-        </label>
-        <label class="row">
-          <span><span class="lbl">子标题</span><span class="hint">主标题下方的副标题 / slogan,公开页展示。留空则不显示。</span></span>
-          <input v-model="siteForm.subtitle" placeholder="如:聚合顶级 AI 模型的生图生视频平台" class="txt" />
+          <span><span class="lbl">子标题</span><span class="hint">首页 Hero 大标题下方那句话。留空则显示默认:「把脑海里的画面写成一句话,GPT、Gemini、Firefly、Flux 等顶级模型替你变成图像与视频。」</span></span>
+          <input v-model="siteForm.subtitle" placeholder="留空 = 默认那句宣传语" class="txt" />
         </label>
         <label class="row">
           <span><span class="lbl">联系 QQ</span><span class="hint">QQ 号(显示用)。留空则不显示该项。</span></span>
@@ -376,6 +417,10 @@ onMounted(() => { loadSite(); loadReg(); loadSmtp(); loadCredits(); loadProxy();
         <label class="row" :class="!credits.invite_enabled && 'opacity-50'">
           <span><span class="lbl">邀请奖励</span><span class="hint">被邀请好友首次生图后,邀请人获得的积分。</span></span>
           <input type="number" min="0" v-model.number="credits.invite_reward" :disabled="!credits.invite_enabled" class="num" />
+        </label>
+        <label class="row">
+          <span><span class="lbl">开启兑换码</span><span class="hint">关闭后用户无法兑换兑换码,前台也不再显示兑换入口。</span></span>
+          <input type="checkbox" v-model="credits.cdk_redeem_enabled" class="sw" />
         </label>
       </div>
       <div class="mt-4"><button @click="saveCredits" :disabled="credBusy" class="btn-primary">{{ credBusy ? '保存中…' : '保存设置' }}</button></div>

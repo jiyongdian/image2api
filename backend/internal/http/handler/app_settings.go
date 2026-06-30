@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"encoding/base64"
 	"net/http"
+	"strings"
 
 	"backend/internal/service"
 	"github.com/gin-gonic/gin"
@@ -13,6 +15,87 @@ type AppSettingsHandler struct {
 
 func NewAppSettingsHandler(settings *service.AppSettingsService) *AppSettingsHandler {
 	return &AppSettingsHandler{settings: settings}
+}
+
+// LogoUpload stores a base64 image as the site logo in RustFS (deleting the old
+// one) and persists site.logo. Called on 保存 — not on file pick.
+func (h *AppSettingsHandler) LogoUpload(c *gin.Context) {
+	var body struct {
+		Data        string `json:"data"` // base64, optionally a "data:...;base64," URL
+		ContentType string `json:"content_type"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid request body"})
+		return
+	}
+	raw := strings.TrimSpace(body.Data)
+	if strings.HasPrefix(raw, "data:") {
+		if i := strings.Index(raw, ","); i >= 0 {
+			if body.ContentType == "" {
+				meta := raw[5:i] // e.g. image/png;base64
+				if j := strings.Index(meta, ";"); j >= 0 {
+					body.ContentType = meta[:j]
+				}
+			}
+			raw = raw[i+1:]
+		}
+	}
+	data, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "图片解码失败"})
+		return
+	}
+	url, err := h.settings.UploadLogo(c.Request.Context(), data, body.ContentType)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "logo": url})
+}
+
+// AssetUpload stores a public image (homepage 底图 etc.) in RustFS and returns
+// its storage path for the caller to save (e.g. as a showcase card's image).
+func (h *AppSettingsHandler) AssetUpload(c *gin.Context) {
+	var body struct {
+		Data        string `json:"data"`
+		ContentType string `json:"content_type"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid request body"})
+		return
+	}
+	raw := strings.TrimSpace(body.Data)
+	if strings.HasPrefix(raw, "data:") {
+		if i := strings.Index(raw, ","); i >= 0 {
+			if body.ContentType == "" {
+				meta := raw[5:i]
+				if j := strings.Index(meta, ";"); j >= 0 {
+					body.ContentType = meta[:j]
+				}
+			}
+			raw = raw[i+1:]
+		}
+	}
+	data, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "图片解码失败"})
+		return
+	}
+	path, err := h.settings.UploadAsset(c.Request.Context(), data, body.ContentType)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "path": path})
+}
+
+// LogoDelete removes the uploaded logo and falls back to the built-in default.
+func (h *AppSettingsHandler) LogoDelete(c *gin.Context) {
+	if err := h.settings.RemoveLogo(c.Request.Context()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to remove logo"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "logo": ""})
 }
 
 func (h *AppSettingsHandler) RegistrationGet(c *gin.Context) {

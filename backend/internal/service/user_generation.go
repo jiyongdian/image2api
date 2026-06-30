@@ -39,13 +39,8 @@ func (s *UserGenerationService) Generate(ctx context.Context, user *model.User, 
 	if user == nil || strings.TrimSpace(user.ID) == "" {
 		return nil, errors.New("未登录或会话已过期")
 	}
-	pending, err := s.events.PendingByUser(ctx, user.ID, "user")
-	if err != nil {
-		return nil, err
-	}
-	if pending != nil {
-		return nil, errors.New("已有正在生成的任务,请稍候")
-	}
+	// No single-job lock anymore — concurrent generations are allowed, capped by
+	// the user's concurrency group (enforced in prepareImageExecution/Video).
 
 	modelItem, err := s.models.Get(ctx, strings.TrimSpace(in.Model))
 	if err != nil {

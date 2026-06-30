@@ -51,17 +51,16 @@ func (s *SiteService) get(ctx context.Context, key string) string {
 func (s *SiteService) Logo(ctx context.Context) string     { return s.get(ctx, "site.logo") }
 func (s *SiteService) Subtitle(ctx context.Context) string { return s.get(ctx, "site.subtitle") }
 
-// SetBranding persists logo / subtitle (either may be empty).
-func (s *SiteService) SetBranding(ctx context.Context, logo, subtitle string) error {
-	for k, v := range map[string]string{
-		"site.logo":     strings.TrimSpace(logo),
-		"site.subtitle": strings.TrimSpace(subtitle),
-	} {
-		if err := s.settings.UpsertValue(ctx, k, v); err != nil {
-			return err
-		}
-	}
-	return nil
+// CDKRedeemEnabled reflects the admin "兑换码" switch (default on). The front-end
+// hides the redeem UI when off.
+func (s *SiteService) CDKRedeemEnabled(ctx context.Context) bool {
+	return s.get(ctx, "credits.cdk_redeem_enabled") != "false"
+}
+
+// SetSubtitle persists the homepage 子标题. (The logo is managed separately via
+// the upload/delete endpoints so a site-form save never clobbers it.)
+func (s *SiteService) SetSubtitle(ctx context.Context, subtitle string) error {
+	return s.settings.UpsertValue(ctx, "site.subtitle", strings.TrimSpace(subtitle))
 }
 
 // Contact is the admin-editable "联系我们" info shown in the public 关于 section.

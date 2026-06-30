@@ -6,7 +6,9 @@ import SelectMenu from './SelectMenu.vue'
 
 const emit = defineEmits(['close', 'saved'])
 
-const RATIO_OPTS = ['1:1', '16:9', '9:16', '4:3', '3:4', '21:9', '3:2', '5:4', '4:5', '2:3', '2:1']
+// 14 ratios — the union of what our models actually support; kept in sync with
+// the backend guessRatio() and the docs 对照表.
+const RATIO_OPTS = ['1:1', '5:4', '4:3', '3:2', '16:9', '2:1', '21:9', '3:1', '4:5', '3:4', '2:3', '9:16', '9:21', '1:3']
 const IMG_RES = ['1K', '2K', '4K']
 const VID_RES = ['720p', '1080p', '2K', '4K']
 const ALL_RES = ['1K', '2K', '4K', '720p', '1080p']

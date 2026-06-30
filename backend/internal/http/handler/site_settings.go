@@ -35,7 +35,6 @@ func (h *SiteSettingsHandler) Put(c *gin.Context) {
 	ctx := c.Request.Context()
 	var body struct {
 		Title    string          `json:"title"`
-		Logo     string          `json:"logo"`
 		Subtitle string          `json:"subtitle"`
 		Contact  service.Contact `json:"contact"`
 	}
@@ -53,8 +52,8 @@ func (h *SiteSettingsHandler) Put(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to save site settings"})
 		return
 	}
-	if err := h.site.SetBranding(ctx, body.Logo, body.Subtitle); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to save branding"})
+	if err := h.site.SetSubtitle(ctx, body.Subtitle); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to save subtitle"})
 		return
 	}
 	if err := h.site.SetContact(ctx, body.Contact); err != nil {

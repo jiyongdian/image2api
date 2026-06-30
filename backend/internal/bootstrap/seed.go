@@ -34,6 +34,7 @@ func seedDefaults(ctx context.Context, db *gorm.DB) error {
 		{Key: "credits.checkin_reward", Value: "3"},
 		{Key: "credits.invite_enabled", Value: "true"},
 		{Key: "credits.invite_reward", Value: "3"},
+		{Key: "credits.cdk_redeem_enabled", Value: "true"},
 		{Key: "logs.retention_days", Value: "30"},
 		{Key: "media.retention_days", Value: "30"},
 	}

@@ -24,6 +24,7 @@ type AuthService struct {
 	codes      *EmailCodeService
 	smtp       *SMTPService
 	loginGuard *LoginGuard
+	cgroups    *repo.ConcurrencyGroupRepository
 }
 
 type AuthSettings struct {
@@ -39,6 +40,7 @@ func NewAuthService(
 	sessions *SessionService,
 	codes *EmailCodeService,
 	smtp *SMTPService,
+	cgroups *repo.ConcurrencyGroupRepository,
 ) *AuthService {
 	return &AuthService{
 		users:      users,
@@ -47,6 +49,7 @@ func NewAuthService(
 		codes:      codes,
 		smtp:       smtp,
 		loginGuard: NewLoginGuard(codes.Redis()),
+		cgroups:    cgroups,
 	}
 }
 
@@ -300,6 +303,12 @@ func (s *AuthService) Register(ctx context.Context, email, username, password, i
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
+	// Bind new users to the default concurrency group.
+	if s.cgroups != nil {
+		if def, derr := s.cgroups.GetDefault(ctx); derr == nil && def != nil {
+			user.ConcurrencyGroupID = def.ID
+		}
+	}
 	if err := s.users.Create(ctx, user); err != nil {
 		return nil, "", nil, err
 	}
@@ -426,6 +435,20 @@ func (s *AuthService) PublicUser(ctx context.Context, user *model.User) (map[str
 	if err != nil {
 		return nil, err
 	}
+	// Concurrency group + its cap (0 = unlimited) for the profile page.
+	concName, concMax := "", 0
+	if s.cgroups != nil {
+		var g *model.ConcurrencyGroup
+		if user.ConcurrencyGroupID != "" {
+			g, _ = s.cgroups.Get(ctx, user.ConcurrencyGroupID)
+		}
+		if g == nil {
+			g, _ = s.cgroups.GetDefault(ctx)
+		}
+		if g != nil {
+			concName, concMax = g.Name, g.MaxConcurrency
+		}
+	}
 	return map[string]any{
 		"id":             user.ID,
 		"email":          user.Email,
@@ -433,6 +456,8 @@ func (s *AuthService) PublicUser(ctx context.Context, user *model.User) (map[str
 		"role":           user.Role,
 		"status":         user.Status,
 		"credits":        user.Credits,
+		"concurrency_group": concName,
+		"concurrency_limit": concMax,
 		"checkin_last":   user.CheckinLast,
 		"checkin_streak": user.CheckinStreak,
 		"checkin_today":  user.CheckinLast == time.Now().Format("2006-01-02"),

@@ -27,7 +27,7 @@ const contact = computed(() => site.contact || {})
            class="group flex items-center justify-between gap-3 rounded-2xl bg-[var(--surface)] ring-1 ring-[color:var(--hairline)] p-5 hover:ring-[color:var(--fg-faint)] transition-all">
           <div>
             <div class="text-[10px] uppercase tracking-[0.25em] text-fuchsia-300/80">商店</div>
-            <div class="text-base font-semibold text-[color:var(--fg)] mt-1 group-hover:text-fuchsia-400 transition-colors">前往充值商店</div>
+            <div class="text-base font-semibold text-[color:var(--fg)] mt-1 group-hover:text-fuchsia-400 transition-colors">前往商店</div>
           </div>
           <span class="text-[color:var(--fg-faint)] group-hover:translate-x-1 transition-transform">→</span>
         </a>

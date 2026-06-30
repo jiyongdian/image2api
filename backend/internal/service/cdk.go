@@ -12,14 +12,16 @@ import (
 )
 
 type CDKService struct {
-	cdks  *repo.CDKRepository
-	users *repo.UserRepository
+	cdks     *repo.CDKRepository
+	users    *repo.UserRepository
+	settings *repo.SiteSettingRepository
 }
 
-func NewCDKService(cdks *repo.CDKRepository, users *repo.UserRepository) *CDKService {
+func NewCDKService(cdks *repo.CDKRepository, users *repo.UserRepository, settings *repo.SiteSettingRepository) *CDKService {
 	return &CDKService{
-		cdks:  cdks,
-		users: users,
+		cdks:     cdks,
+		users:    users,
+		settings: settings,
 	}
 }
 
@@ -127,6 +129,12 @@ func (s *CDKService) DeleteBulk(ctx context.Context, codes []string) (int, error
 }
 
 func (s *CDKService) Redeem(ctx context.Context, userID, code string) (map[string]any, error) {
+	// Honor the admin "兑换码" switch — when off, no code can be redeemed.
+	if s.settings != nil {
+		if v, _ := s.settings.GetValue(ctx, "credits.cdk_redeem_enabled"); v == "false" {
+			return nil, errors.New("兑换功能已关闭")
+		}
+	}
 	code = strings.TrimSpace(strings.ToUpper(code))
 	if code == "" {
 		return nil, errors.New("请输入兑换码")

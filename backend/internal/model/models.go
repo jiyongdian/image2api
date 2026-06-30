@@ -15,6 +15,7 @@ type User struct {
 	Status           string  `gorm:"size:32;index;not null"`
 	Credits          float64 `gorm:"not null;default:0"`
 	Notes            string  `gorm:"type:text"`
+	ConcurrencyGroupID string `gorm:"size:32;index"`
 	InviteCode       string  `gorm:"size:32;uniqueIndex"`
 	InvitedBy        *string `gorm:"size:32;index"`
 	InviteRewardDone bool    `gorm:"not null;default:false"`
@@ -203,7 +204,20 @@ func AutoMigrateModels() []any {
 		&RefreshProfile{},
 		&SiteSetting{},
 		&StatCounter{},
+		&ConcurrencyGroup{},
 	}
+}
+
+// ConcurrencyGroup caps how many generations a member user may run AT ONCE
+// (across their API key + 画图台). MaxConcurrency 0 = unlimited. Exactly one
+// group is IsDefault — new users are bound to it and it can't be deleted.
+type ConcurrencyGroup struct {
+	ID             string `gorm:"primaryKey;size:32"`
+	Name           string `gorm:"size:100;not null"`
+	MaxConcurrency int    `gorm:"not null;default:10"` // 0 = 不限制
+	IsDefault      bool   `gorm:"not null;default:false;index"`
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // StatCounter is a persistent monotonic counter (key → value), independent of the

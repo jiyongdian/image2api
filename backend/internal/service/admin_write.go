@@ -27,15 +27,17 @@ type AdminWriteService struct {
 	models   *repo.ModelRepository
 	events   *repo.EventRepository
 	apiKeys  *repo.APIKeyRepository
+	tokens   *repo.TokenRepository
 }
 
-func NewAdminWriteService(users *repo.UserRepository, showcase *repo.ShowcaseRepository, models *repo.ModelRepository, events *repo.EventRepository, apiKeys *repo.APIKeyRepository) *AdminWriteService {
+func NewAdminWriteService(users *repo.UserRepository, showcase *repo.ShowcaseRepository, models *repo.ModelRepository, events *repo.EventRepository, apiKeys *repo.APIKeyRepository, tokens *repo.TokenRepository) *AdminWriteService {
 	return &AdminWriteService{
 		users:    users,
 		showcase: showcase,
 		models:   models,
 		events:   events,
 		apiKeys:  apiKeys,
+		tokens:   tokens,
 	}
 }
 
@@ -60,6 +62,7 @@ func (s *AdminWriteService) CreateUser(ctx context.Context, body map[string]any)
 	status := normalizedStatus(stringValue(body["status"]))
 	credits := maxFloat(0, floatValue(body["credits"]))
 	notes := strings.TrimSpace(stringValue(body["notes"]))
+	cgroupID := strings.TrimSpace(stringValue(body["concurrency_group_id"]))
 
 	exists, err := s.users.ExistsEmail(ctx, email, "")
 	if err != nil {
@@ -99,6 +102,7 @@ func (s *AdminWriteService) CreateUser(ctx context.Context, body map[string]any)
 		Status:       status,
 		Credits:      credits,
 		Notes:        notes,
+		ConcurrencyGroupID: cgroupID,
 		InviteCode:   randomInviteCode(),
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
@@ -160,6 +164,9 @@ func (s *AdminWriteService) UpdateUser(ctx context.Context, userID string, body 
 	}
 	if _, ok := body["notes"]; ok {
 		patch["notes"] = strings.TrimSpace(stringValue(body["notes"]))
+	}
+	if _, ok := body["concurrency_group_id"]; ok {
+		patch["concurrency_group_id"] = strings.TrimSpace(stringValue(body["concurrency_group_id"]))
 	}
 	if _, ok := body["password"]; ok && strings.TrimSpace(stringValue(body["password"])) != "" {
 		if err := ValidatePassword(stringValue(body["password"])); err != nil {
@@ -458,7 +465,50 @@ func (s *AdminWriteService) DeleteModel(ctx context.Context, modelID string) err
 	if rows == 0 {
 		return ErrNotFound
 	}
+	// Clean up: strip this model id from every custom upstream account's
+	// supported-models list so no orphan reference is left behind.
+	s.removeModelFromUpstreams(ctx, modelID)
 	return nil
+}
+
+// removeModelFromUpstreams drops modelID from the CSV in each custom account's
+// Meta["models"]. Best-effort — a failure here doesn't undo the model delete.
+func (s *AdminWriteService) removeModelFromUpstreams(ctx context.Context, modelID string) {
+	if s.tokens == nil {
+		return
+	}
+	items, err := s.tokens.ListByPool(ctx, "custom")
+	if err != nil {
+		return
+	}
+	for _, it := range items {
+		raw, _ := it.Meta["models"].(string)
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		kept := make([]string, 0, len(strings.Split(raw, ",")))
+		changed := false
+		for _, p := range strings.Split(raw, ",") {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if p == modelID {
+				changed = true
+				continue
+			}
+			kept = append(kept, p)
+		}
+		if !changed {
+			continue
+		}
+		meta := datatypes.JSONMap{}
+		for k, v := range it.Meta {
+			meta[k] = v
+		}
+		meta["models"] = strings.Join(kept, ",")
+		_, _ = s.tokens.Update(ctx, "custom", it.ID, map[string]any{"meta": meta})
+	}
 }
 
 func (s *AdminWriteService) ClearLogs(ctx context.Context) (int64, error) {
