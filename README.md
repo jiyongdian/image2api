@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="frontend/public/favicon.svg" width="84" alt="Vivid AI" />
+
 <h1>image2api</h1>
 
 **多供应商 AI 生图 / 生视频网关 —— 一套 OpenAI 兼容 API,聚合七大平台,开箱即用的运营系统**
@@ -14,7 +16,7 @@
 [![Vue 3](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)](https://vuejs.org)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-部署)
 [![OpenAI Compatible](https://img.shields.io/badge/OpenAI-compatible-412991?logo=openai&logoColor=white)](#-openai-兼容-api)
-[![HTTPS](https://img.shields.io/badge/HTTPS-acme.sh%20自动签发-success)](#方式一docker-一键推荐)
+[![HTTPS](https://img.shields.io/badge/HTTPS-反代自理-lightgrey)](#-部署)
 [![Providers](https://img.shields.io/badge/供应商-7%20平台-orange)](#-支持的模型--供应商)
 [![Self-hosted](https://img.shields.io/badge/self--hosted-yes-success)](#-部署)
 [![License](https://img.shields.io/badge/license-MIT-blue)](#-license)
@@ -51,7 +53,7 @@
 
 > 💡 前后端**完全开源**(MIT),Go + Vue 3,可自由二开 / 自部署。
 
-**一句话亮点** 🔌 OpenAI 兼容 · 🤖 7 平台十余模型 · 🔁 自动换号 / Token 保活 · 💳 积分 + 在线充值(易支付)+ 代理价 · 🧩 并发分组 · 🎨 画图前端 + 管理后台 · 🐳 一键部署 + 自动 HTTPS
+**一句话亮点** 🔌 OpenAI 兼容 · 🤖 7 平台十余模型 · 🔁 自动换号 / Token 保活 · 💳 积分 + 在线充值(易支付)+ 代理价 · 🧩 并发分组 · 🎨 画图前端 + 管理后台 · 🐳 一键部署(TLS 反代自理)
 
 ## 🖼️ 界面预览
 
@@ -107,7 +109,7 @@
 - 概览看板(趋势 / DAU / 失败 Top / 消费榜)
 - 模型管理(普通价 + 代理价) · 账号管理(批量导入 / 去重 / 额度) · **并发分组** · **订单管理**(筛选 / 搜索 / 分页) · 全站日志 · 用户管理(设为代理 / 分配并发组 / 看累计充值) · CDK · 展示位 · **站点公告** · 站点配置(含易支付)
 
-**🧰 工程亮点**:tls-client(Chrome JA3/JA4 指纹)稳定穿透 Cloudflare · 媒体存 S3/RustFS 经鉴权代理分发 + 保留期清理 · 自愈式维护轮询(恢复额度 / 刷新凭据 / 清理僵死任务并退款) · 一条命令 Docker 部署 + acme.sh 自动 HTTPS。
+**🧰 工程亮点**:tls-client(Chrome JA3/JA4 指纹)稳定穿透 Cloudflare · 媒体存 S3/RustFS 经鉴权代理分发 + 保留期清理 · 自愈式维护轮询(恢复额度 / 刷新凭据 / 清理僵死任务并退款) · 一条命令 Docker 部署(TLS 交给你的反代)。
 
 ## 🤖 支持的模型 / 供应商
 
@@ -147,27 +149,11 @@ curl https://你的域名/v1/images/edits \
 
 ## 🚀 部署
 
-前后端均开源。推荐 Docker 一键;也可用 **Go 1.26+** 从源码构建。
+> 域名 + HTTPS 由你自己的反向代理处理(本项目不内置证书签发)。
 
-> 前置:域名 A 记录指向本机,**80 / 443 对公网开放**(Let's Encrypt 验证需要)。
+**Docker(推荐)**:`docker compose up -d --build` 一条命令拉起 PostgreSQL + Redis + RustFS + 后端 + 前端(nginx **HTTP 监听容器 2000 端口**),把你的反向代理指到 `http://<本机>:2000`(端口用 `WEB_PORT` 改;要自定义密码 / 密钥 / `CORS_ORIGINS` 就在 compose 同目录建 `.env` 配,反代走 HTTPS 时设 `COOKIE_SECURE=true`)。
 
-### 方式一:Docker 一键(推荐)
-
-需要 Docker + Docker Compose。一条命令拉起 Postgres + Redis + RustFS + 后端 + 前端,并**自动签发 / 续期 HTTPS 证书**(内置 acme.sh)。
-
-```bash
-cp .env.docker.example .env   # 填 DOMAIN / ACME_EMAIL / POSTGRES_PASSWORD / S3_SECRET_KEY
-sh install.sh                 # = docker compose up -d --build
-```
-
-打开 `https://<你的域名>/`;证书进度 `docker compose logs -f acme`。`DOMAIN=localhost` 时用自签证书(本地测试)。
-
-<details>
-<summary><b>方式二:手动安装</b> — 自建 PostgreSQL / Redis / RustFS / Nginx(点击展开)</summary>
-
-<br/>
-
-自备 **PostgreSQL · Redis · RustFS(或任意 S3)· Nginx**,后端用 **Go 1.26+**,前端用 **Node 18+**。
+也可**从源码手动构建**,自备 **PostgreSQL · Redis · RustFS(或任意 S3)· 反向代理**:
 
 ```bash
 # 1. 创建空库(后端启动自动建表)
@@ -216,15 +202,13 @@ server {
 
 > 完整环境变量见 `backend/.env.example`。
 
-</details>
-
 ## 🧱 技术栈
 
 | 层 | 技术 |
 |---|---|
 | 后端 | Go · gin · gorm(PostgreSQL)· go-redis · tls-client(Chrome 指纹) |
 | 前端 | Vue 3 · Vue Router · Vite · Tailwind CSS v4 |
-| 基础设施 | PostgreSQL · Redis · RustFS(S3 兼容)· Nginx · acme.sh |
+| 基础设施 | PostgreSQL · Redis · RustFS(S3 兼容)· Nginx |
 
 ## 📦 仓库结构
 
@@ -264,12 +248,11 @@ frontend/                      前端源码(Vue 3 + Vite)
 │   ├── layouts/                公共 / 后台布局
 │   ├── utils/                  工具函数
 │   └── api.js · auth.js …      接口封装、鉴权、主题、积分等
-├── Dockerfile                 Nginx 静态托管 + 证书监听
+├── Dockerfile                 Nginx 静态托管(HTTP :2000)+ API 反代
 └── default.conf.template      Nginx 站点模板(反代 + 缓存策略)
 
-docker-compose.yml             Docker 编排(Postgres / Redis / RustFS / 后端 / 前端 / acme)
-install.sh                     一键部署脚本(= docker compose up -d --build)
-.env.docker.example            部署环境变量模板
+docker-compose.yml             Docker 编排(Postgres / Redis / RustFS / 后端 / 前端)
+.env.example → backend/.env    后端环境变量模板
 ```
 
 ## 🗺️ Roadmap

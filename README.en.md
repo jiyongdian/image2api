@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="frontend/public/favicon.svg" width="84" alt="Vivid AI" />
+
 <h1>image2api</h1>
 
 **Multi-provider AI image / video generation gateway — one OpenAI-compatible API, seven platforms aggregated, a ready-to-run operations system**
@@ -14,7 +16,7 @@
 [![Vue 3](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)](https://vuejs.org)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](#-deployment)
 [![OpenAI Compatible](https://img.shields.io/badge/OpenAI-compatible-412991?logo=openai&logoColor=white)](#-openai-compatible-api)
-[![HTTPS](https://img.shields.io/badge/HTTPS-acme.sh%20auto--issue-success)](#option-1-docker-one-command-recommended)
+[![HTTPS](https://img.shields.io/badge/HTTPS-your--proxy-lightgrey)](#-deployment)
 [![Providers](https://img.shields.io/badge/providers-7-orange)](#-supported-models--providers)
 [![Self-hosted](https://img.shields.io/badge/self--hosted-yes-success)](#-deployment)
 [![License](https://img.shields.io/badge/license-MIT-blue)](#-license)
@@ -51,7 +53,7 @@ It's more than an API proxy: it ships with **credit billing, CDK top-ups, referr
 
 > 💡 Both frontend and backend are **fully open-source** (MIT) — Go + Vue 3, free to fork and self-host.
 
-**At a glance** 🔌 OpenAI-compatible · 🤖 7 platforms, 10+ models · 🔁 auto failover / token keep-alive · 💳 credits + agent pricing · 🎨 generation frontend + admin console · 🐳 one-command deploy + auto HTTPS
+**At a glance** 🔌 OpenAI-compatible · 🤖 7 platforms, 10+ models · 🔁 auto failover / token keep-alive · 💳 credits + agent pricing · 🎨 generation frontend + admin console · 🐳 one-command deploy (bring your own TLS proxy)
 
 ## 🖼️ Screenshots
 
@@ -100,7 +102,7 @@ It's more than an API proxy: it ships with **credit billing, CDK top-ups, referr
 - Overview dashboard (trends / DAU / top failures / top spenders)
 - Model management (normal + agent price) · account management (bulk import / dedup / quota) · **concurrency groups** · **order management** (filter / search / paginate) · site-wide logs · user management (set as agent / assign concurrency group / view cumulative top-up) · CDK · showcase · **announcements** · site config (incl. epay)
 
-**🧰 Engineering highlights**: tls-client (Chrome JA3/JA4 fingerprint) reliably passes Cloudflare · media stored in S3/RustFS, served through an authenticated proxy with retention cleanup · self-healing maintenance loop (quota recovery / credential refresh / orphan-job cleanup with refunds) · one-command Docker deploy with acme.sh auto HTTPS.
+**🧰 Engineering highlights**: tls-client (Chrome JA3/JA4 fingerprint) reliably passes Cloudflare · media stored in S3/RustFS, served through an authenticated proxy with retention cleanup · self-healing maintenance loop (quota recovery / credential refresh / orphan-job cleanup with refunds) · one-command Docker deploy (TLS via your own reverse proxy).
 
 ## 🤖 Supported Models / Providers
 
@@ -139,27 +141,11 @@ Images return OpenAI-style `{ "created": ..., "data": [{ "b64_json": "..." }] }`
 
 ## 🚀 Deployment
 
-Both frontend and backend are open-source. Docker one-command is recommended; you can also build from source with **Go 1.26+**.
+> Domain + HTTPS are handled by your own reverse proxy (this project issues no certificates).
 
-> Prerequisite: a domain A-record pointing to this host, with **ports 80 / 443 open to the internet** (required for Let's Encrypt verification).
+**Docker (recommended)**: `docker compose up -d --build` brings up PostgreSQL + Redis + RustFS + backend + frontend (nginx serving **HTTP on container port 2000**); point your reverse proxy at `http://<host>:2000` (port via `WEB_PORT`; set passwords / keys / `CORS_ORIGINS` in a `.env` beside the compose file, `COOKIE_SECURE=true` when your proxy serves HTTPS).
 
-### Option 1: Docker, one command (recommended)
-
-Requires Docker + Docker Compose. A single command brings up Postgres + Redis + RustFS + backend + frontend, and **auto-issues / renews the HTTPS certificate** (built-in acme.sh).
-
-```bash
-cp .env.docker.example .env   # fill in DOMAIN / ACME_EMAIL / POSTGRES_PASSWORD / S3_SECRET_KEY
-sh install.sh                 # = docker compose up -d --build
-```
-
-Open `https://<your-domain>/`; watch cert progress with `docker compose logs -f acme`. With `DOMAIN=localhost` a self-signed cert is used (local testing).
-
-<details>
-<summary><b>Option 2: Manual install</b> — bring your own PostgreSQL / Redis / RustFS / Nginx (click to expand)</summary>
-
-<br/>
-
-Provide your own **PostgreSQL · Redis · RustFS (or any S3) · Nginx**, **Go 1.26+** for the backend and **Node 18+** for the frontend.
+Or **build from source** — bring your own **PostgreSQL · Redis · RustFS (or any S3) · reverse proxy**:
 
 ```bash
 # 1. Create an empty database (the backend auto-migrates on start)
@@ -216,7 +202,7 @@ server {
 |---|---|
 | Backend | Go · gin · gorm (PostgreSQL) · go-redis · tls-client (Chrome fingerprint) |
 | Frontend | Vue 3 · Vue Router · Vite · Tailwind CSS v4 |
-| Infrastructure | PostgreSQL · Redis · RustFS (S3-compatible) · Nginx · acme.sh |
+| Infrastructure | PostgreSQL · Redis · RustFS (S3-compatible) · Nginx |
 
 ## 📦 Repository Layout
 
@@ -256,12 +242,10 @@ frontend/                      Frontend source (Vue 3 + Vite)
 │   ├── layouts/               Public / admin layouts
 │   ├── utils/                 Utility functions
 │   └── api.js · auth.js …     API client, auth, theme, credits, etc.
-├── Dockerfile                 Nginx static hosting + cert watcher
+├── Dockerfile                 Nginx static hosting (HTTP :2000) + API proxy
 └── default.conf.template      Nginx site template (reverse proxy + caching)
 
-docker-compose.yml             Docker orchestration (Postgres / Redis / RustFS / backend / frontend / acme)
-install.sh                     One-command deploy script (= docker compose up -d --build)
-.env.docker.example            Deployment env-var template
+docker-compose.yml             Docker orchestration (Postgres / Redis / RustFS / backend / frontend)
 ```
 
 ## 🗺️ Roadmap
