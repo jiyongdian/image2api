@@ -9,6 +9,7 @@ import SelectMenu from '../components/SelectMenu.vue'
 import MediaLightbox from '../components/MediaLightbox.vue'
 import { pointsLabel } from '../credits'
 import { sortResolutions } from '../utils/format'
+import { copyText } from '../utils/clipboard'
 
 const route = useRoute()
 
@@ -263,6 +264,12 @@ function flash(msg) {
   toast.value = msg
   clearTimeout(toastTimer)
   toastTimer = setTimeout(() => (toast.value = ''), 1800)
+}
+
+async function copyPrompt(item) {
+  const text = (item && item.prompt) || ''
+  if (!text.trim()) return
+  flash(await copyText(text) ? '指令已复制' : '复制失败')
 }
 
 // ---- generate (concurrent — no lock) ----
@@ -691,7 +698,9 @@ onUnmounted(() => {
               </button>
             </div>
             <div class="absolute inset-x-0 bottom-0 p-2.5 pointer-events-none">
-              <div class="pg-cap text-[11px] leading-tight font-medium line-clamp-2" :title="item.prompt">{{ item.prompt }}</div>
+              <div class="pg-cap text-[11px] leading-tight font-medium line-clamp-2 transition-colors"
+                   :class="item.prompt ? 'pointer-events-auto cursor-pointer' : ''"
+                   :title="item.prompt ? '点击复制提示词' : ''" @click.stop="copyPrompt(item)">{{ item.prompt }}</div>
               <div class="pg-cap-sub text-[9px] mt-0.5 font-mono truncate">{{ item.model }}<span v-if="item.elapsed_ms"> · {{ (item.elapsed_ms / 1000).toFixed(1) }}s</span></div>
             </div>
           </template>
@@ -744,5 +753,6 @@ onUnmounted(() => {
    The global `.theme-text` remap would otherwise darken them (it turns
    over-image whites dark for the marketing pages), making them unreadable here. */
 .pg-cap { color: #fff !important; }
+.pg-cap.cursor-pointer:hover { color: rgb(255 255 255 / 0.75) !important; }
 .pg-cap-sub { color: rgb(255 255 255 / 0.62) !important; }
 </style>

@@ -1,12 +1,14 @@
 package grok
 
 import (
+	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
+	"net/textproto"
 	"os"
 	"regexp"
 	"strings"
@@ -14,6 +16,7 @@ import (
 
 	http "github.com/bogdanfinn/fhttp"
 	tlsclient "github.com/bogdanfinn/tls-client"
+	"github.com/google/uuid"
 )
 
 // assetBase is where generated media artifacts live (the stream returns a
@@ -166,17 +169,11 @@ func (c *Client) GenerateVideo(ctx context.Context, token, prompt, aspectRatio, 
 	return data, meta, nil
 }
 
-// uploadImage uploads one reference frame via /rest/app-chat/upload-file (JSON
-// with base64 content) and returns its asset content URL for imageReferences.
-// Cloudflare's bot score is per-request, so a big base64 upload can hit a
-// "Just a moment…" 403 intermittently while identical requests pass — retry
-// transient failures with backoff instead of failing the whole task.
+// uploadImage uploads one reference frame via /http/upload-file-v2/direct and
+// returns its asset content URL for imageReferences. Cloudflare's bot score is
+// per-request, so retry transient failures with backoff instead of failing the
+// whole task.
 func (c *Client) uploadImage(ctx context.Context, client tlsclient.HttpClient, token string, img []byte) (string, error) {
-	body := map[string]any{
-		"fileName":     "ref.png",
-		"fileMimeType": "image/png",
-		"content":      base64.StdEncoding.EncodeToString(img),
-	}
 	var res map[string]any
 	var err error
 	backoffs := []time.Duration{0, 2 * time.Second, 5 * time.Second, 10 * time.Second}
@@ -188,7 +185,7 @@ func (c *Client) uploadImage(ctx context.Context, client tlsclient.HttpClient, t
 			case <-time.After(wait):
 			}
 		}
-		res, err = c.postJSON(ctx, client, token, "/rest/app-chat/upload-file", body)
+		res, err = c.uploadFileV2(ctx, client, token, img)
 		if err == nil || !errors.Is(err, ErrTemporaryUpstream) {
 			break
 		}
@@ -196,7 +193,11 @@ func (c *Client) uploadImage(ctx context.Context, client tlsclient.HttpClient, t
 	if err != nil {
 		return "", err
 	}
-	fileURI := strings.TrimSpace(stringValue(res["fileUri"]))
+	meta, _ := res["fileMetadata"].(map[string]any)
+	fileURI := ""
+	if meta != nil {
+		fileURI = strings.TrimSpace(stringValue(meta["fileUri"]))
+	}
 	if fileURI == "" {
 		return "", fmt.Errorf("%w: upload missing fileUri", ErrTemporaryUpstream)
 	}
@@ -204,6 +205,52 @@ func (c *Client) uploadImage(ctx context.Context, client tlsclient.HttpClient, t
 		return fileURI, nil
 	}
 	return assetBase + strings.TrimPrefix(fileURI, "/"), nil
+}
+
+func (c *Client) uploadFileV2(ctx context.Context, client tlsclient.HttpClient, token string, img []byte) (map[string]any, error) {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	partHeader := textproto.MIMEHeader{}
+	partHeader.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename="%s"`, uuid.NewString()+".png"))
+	partHeader.Set("Content-Type", "image/png")
+	part, err := mw.CreatePart(partHeader)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := part.Write(img); err != nil {
+		return nil, err
+	}
+	if err := mw.WriteField("file_source", "IMAGINE_SELF_UPLOAD_FILE_SOURCE"); err != nil {
+		return nil, err
+	}
+	if err := mw.Close(); err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, apiBase+"/http/upload-file-v2/direct", bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	c.applyHeaders(req, token, map[string]string{"content-type": mw.FormDataContentType()})
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrTemporaryUpstream, err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrTemporaryUpstream, err)
+	}
+	if e := mapStatus("/http/upload-file-v2/direct", resp.StatusCode, raw); e != nil {
+		return nil, e
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("%w: upload non-json: %s", ErrTemporaryUpstream, clip(raw, 120))
+	}
+	return out, nil
 }
 
 // createPost registers a video media post and returns its id (parentPostId).
