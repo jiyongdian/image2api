@@ -944,6 +944,66 @@ func (s *TokenService) checkPendingGrok(tokenID, ssoToken string) {
 	s.finishPending(ctx, "grok", tokenID, "active", false, quotaMeta)
 }
 
+// RefreshGrokLiveness re-validates every live grok account each maintenance tick.
+// Grok sso can't be renewed and has no reset-based death deadline (billingPeriodEnd
+// is only a credits-renewal date — the sso keeps working past it), so liveness is
+// probed directly: GET /rest/subscriptions. No ACTIVE entry — a lapsed membership
+// flips to SUBSCRIPTION_STATUS_INACTIVE (empty array / 401 also count) — means the
+// paid membership is gone → the account is disabled+dead. Otherwise the credits
+// balance is re-synced and 恢复时间 is refreshed from the credits' own weekly
+// reset (NOT the subscription's billing-period end).
+func (s *TokenService) RefreshGrokLiveness(ctx context.Context) {
+	if s.grok == nil {
+		return
+	}
+	items, err := s.tokens.List(ctx)
+	if err != nil {
+		return
+	}
+	s.applyProxy(ctx)
+	for i := range items {
+		it := items[i]
+		if it.Pool != "grok" || it.Dead || it.Status == "disabled" || strings.TrimSpace(it.Value) == "" {
+			continue
+		}
+		sub, serr := s.grok.FetchSubscription(ctx, it.Value)
+		if serr != nil {
+			if errors.Is(serr, grok.ErrAuth) {
+				_, _ = s.tokens.Update(ctx, "grok", it.ID, map[string]any{"status": "disabled", "dead": true})
+			}
+			continue // transient upstream error → leave as-is, retry next tick
+		}
+		if sub == nil || !sub.Member {
+			// no ACTIVE subscription (INACTIVE / empty) → membership lapsed → dead.
+			_, _ = s.tokens.Update(ctx, "grok", it.ID, map[string]any{"status": "disabled", "dead": true})
+			continue
+		}
+		data, derr := s.grok.FetchCreditsBalance(ctx, it.Value)
+		if derr != nil {
+			if errors.Is(derr, grok.ErrAuth) {
+				_, _ = s.tokens.Update(ctx, "grok", it.ID, map[string]any{"status": "disabled", "dead": true})
+			}
+			continue
+		}
+		meta := cloneJSONMap(it.Meta)
+		meta["cached_quota_at"] = int(time.Now().Unix())
+		if rem, ok := data["remaining"].(int); ok {
+			meta["cached_quota_remaining"] = rem
+		}
+		if used, ok := data["used"].(int); ok {
+			meta["cached_quota_used"] = used
+		}
+		if total, ok := data["total"].(int); ok {
+			meta["cached_quota_total"] = total
+		}
+		patch := map[string]any{"meta": meta}
+		if reset := strings.TrimSpace(stringValue(data["reset_after"])); reset != "" {
+			patch["cached_quota_reset_after"] = reset
+		}
+		_, _ = s.tokens.Update(ctx, "grok", it.ID, patch)
+	}
+}
+
 // ImportCustomAccount adds an upstream as a custom account: base_url + key, the
 // csv list of model ids it serves (empty = all), plus optional weight and
 // per-account concurrency. No probe — the account goes active immediately and is
@@ -1446,11 +1506,10 @@ func (s *TokenService) Quota(ctx context.Context, pool, id string) (map[string]a
 			meta["cached_quota_total"] = total
 		}
 		patch["meta"] = meta
-		// Recovery time is the death deadline: the maintenance sweep expires a grok
-		// account once this marker passes (grok sso can't be renewed). Only stamp it
-		// when still unset (import couldn't resolve it) — never move it forward on a
-		// later refresh, so an admin opening 账号管理 can't push the death time out.
-		if reset := strings.TrimSpace(stringValue(data["reset_after"])); reset != "" && strings.TrimSpace(item.CachedQuotaResetAfter) == "" {
+		// Recovery time is the credits' weekly reset (when the grant refills) —
+		// purely informational, NOT a death deadline (liveness is judged by the
+		// subscriptions sweep / real 401s), so it's safe to refresh every time.
+		if reset := strings.TrimSpace(stringValue(data["reset_after"])); reset != "" {
 			patch["cached_quota_reset_after"] = reset
 			item.CachedQuotaResetAfter = reset
 		}

@@ -1303,7 +1303,7 @@ const maxTempDeadAccounts = 3
 // auth retry uses a FRESH token instead of replaying the stale one.
 func (s *V1Service) runPoolWithFailover(ctx context.Context, eventID, pool string, active []model.TokenAccount, kind string,
 	attempt func(token model.TokenAccount) ([]byte, error),
-	classify func(error) (isAuth, isQuota, isTemporary bool),
+	classify func(error) (isAuth, isQuota, isTemporary, isDead bool),
 	refreshOnAuth func(tokenID string) (model.TokenAccount, bool),
 	tempFailover bool,
 ) ([]byte, error) {
@@ -1357,7 +1357,7 @@ func (s *V1Service) runPoolWithFailover(ctx context.Context, eventID, pool strin
 // to the next account. The per-account concurrency gate is held by the caller.
 func (s *V1Service) tryAccount(ctx context.Context, eventID, pool string, token model.TokenAccount, kind string,
 	attempt func(token model.TokenAccount) ([]byte, error),
-	classify func(error) (isAuth, isQuota, isTemporary bool),
+	classify func(error) (isAuth, isQuota, isTemporary, isDead bool),
 	refreshOnAuth func(tokenID string) (model.TokenAccount, bool),
 	tempFailover bool,
 ) ([]byte, error, bool, bool) {
@@ -1375,7 +1375,7 @@ func (s *V1Service) tryAccount(ctx context.Context, eventID, pool string, token 
 			})
 			return data, nil, false, false
 		}
-		isAuth, isQuota, isTemp := classify(err)
+		isAuth, isQuota, isTemp, isDead := classify(err)
 		if isQuota {
 			s.markTokenFailure(ctx, pool, token, kind, false, true)
 			return nil, err, true, false
@@ -1391,6 +1391,10 @@ func (s *V1Service) tryAccount(ctx context.Context, eventID, pool string, token 
 			}
 			s.markTokenFailure(ctx, pool, token, kind, true, false)
 			return nil, err, true, false
+		}
+		if isDead {
+			s.markTokenDead(ctx, pool, token, kind)
+			return nil, err, true, true
 		}
 		if isTemp {
 			if tempFailover {
@@ -1424,8 +1428,8 @@ func (s *V1Service) tryAccount(ctx context.Context, eventID, pool string, token 
 	}
 }
 
-func adobeErrClass(e error) (bool, bool, bool) {
-	return errors.Is(e, adobe.ErrAuth), errors.Is(e, adobe.ErrQuotaExhausted), errors.Is(e, adobe.ErrTemporaryUpstream)
+func adobeErrClass(e error) (bool, bool, bool, bool) {
+	return errors.Is(e, adobe.ErrAuth), errors.Is(e, adobe.ErrQuotaExhausted), errors.Is(e, adobe.ErrTemporaryUpstream), errors.Is(e, adobe.ErrDeadUpstream)
 }
 
 func (s *V1Service) generateAdobeImage(ctx context.Context, eventID string, modelItem *model.ModelConfig, in V1ImageRequest, aspectRatio, resolution string) ([]byte, error) {
@@ -2178,8 +2182,8 @@ func (s *V1Service) generateChatGPTImage(ctx context.Context, eventID string, mo
 			s.reconcileChatGPTQuota(ctx, token.ID, token.Value)
 		}
 		return data, genErr
-	}, func(e error) (bool, bool, bool) {
-		return errors.Is(e, chatgpt.ErrAuth), errors.Is(e, chatgpt.ErrQuotaExhausted), errors.Is(e, chatgpt.ErrTemporaryUpstream)
+	}, func(e error) (bool, bool, bool, bool) {
+		return errors.Is(e, chatgpt.ErrAuth), errors.Is(e, chatgpt.ErrQuotaExhausted), errors.Is(e, chatgpt.ErrTemporaryUpstream), false
 	}, nil, false) // chatgpt token IS the credential — no cookie to refresh
 }
 
@@ -2305,8 +2309,8 @@ func (s *V1Service) generateLeonardoImage(ctx context.Context, eventID string, m
 		// sink to 限额 if below the floor (best-effort; never fails a done render).
 		s.reconcileLeonardoCredits(ctx, token.ID, token.Value)
 		return data, nil
-	}, func(e error) (bool, bool, bool) {
-		return errors.Is(e, leonardo.ErrAuth), errors.Is(e, leonardo.ErrQuotaExhausted), errors.Is(e, leonardo.ErrTemporaryUpstream)
+	}, func(e error) (bool, bool, bool, bool) {
+		return errors.Is(e, leonardo.ErrAuth), errors.Is(e, leonardo.ErrQuotaExhausted), errors.Is(e, leonardo.ErrTemporaryUpstream), false
 	}, nil, false)
 }
 
@@ -2435,8 +2439,8 @@ func (s *V1Service) generateKreaImage(ctx context.Context, eventID string, model
 		}
 		data, _, genErr := s.krea.GenerateImage(ctx, cookie, in.Prompt, width, height, refs)
 		return data, genErr
-	}, func(e error) (bool, bool, bool) {
-		return errors.Is(e, krea.ErrAuth), errors.Is(e, krea.ErrQuotaExhausted), errors.Is(e, krea.ErrTemporaryUpstream)
+	}, func(e error) (bool, bool, bool, bool) {
+		return errors.Is(e, krea.ErrAuth), errors.Is(e, krea.ErrQuotaExhausted), errors.Is(e, krea.ErrTemporaryUpstream), false
 	}, nil, false)
 }
 
@@ -2507,8 +2511,8 @@ func (s *V1Service) generateImagineImage(ctx context.Context, eventID string, mo
 			return nil, genErr
 		}
 		return data, nil
-	}, func(e error) (bool, bool, bool) {
-		return errors.Is(e, imagine.ErrAuth), errors.Is(e, imagine.ErrQuotaExhausted), errors.Is(e, imagine.ErrTemporaryUpstream)
+	}, func(e error) (bool, bool, bool, bool) {
+		return errors.Is(e, imagine.ErrAuth), errors.Is(e, imagine.ErrQuotaExhausted), errors.Is(e, imagine.ErrTemporaryUpstream), false
 	}, nil, false)
 }
 
@@ -2953,6 +2957,18 @@ func (s *V1Service) markTokenFailure(ctx context.Context, pool string, token mod
 		// the token dead in the isAuth case above; that is a genuinely dead token.)
 	}
 	_, _ = s.tokens.Update(ctx, pool, token.ID, patch)
+}
+
+// markTokenDead disables an account and marks it dead on a fatal upstream error
+// (a non-overload temporary Adobe failure that ops policy treats as account death).
+func (s *V1Service) markTokenDead(ctx context.Context, pool string, token model.TokenAccount, kind string) {
+	_, _ = s.tokens.Update(ctx, pool, token.ID, map[string]any{
+		"last_used_at": time.Now(),
+		"fail_total":   gorm.Expr("fail_total + 1"),
+		"fails":        gorm.Expr("fails + 1"),
+		"status":       "disabled",
+		"dead":         true,
+	})
 }
 
 // nextCursor returns the pool's current round-robin position and atomically

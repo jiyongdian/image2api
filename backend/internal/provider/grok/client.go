@@ -142,7 +142,9 @@ func (c *Client) FetchCreditsBalance(ctx context.Context, token string) (map[str
 
 	// GetGrokCreditsConfig field #1 is the credits USED this period (not remaining):
 	// an exhausted account reads 100, a fresh one reads ~0. Remaining = 100 - used.
-	used, _, ok := parseCreditsConfig(raw)
+	// Field #5 carries the credits' own reset timestamp (weekly grant refill) —
+	// this is the 恢复时间 we surface, NOT the subscription's billing-period end.
+	used, resetUnix, ok := parseCreditsConfig(raw)
 	if !ok {
 		return unknownBalance("unparsable credits config"), nil
 	}
@@ -154,15 +156,8 @@ func (c *Client) FetchCreditsBalance(ctx context.Context, token string) (map[str
 	}
 	remaining := fullCredits - used
 
-	// 恢复时间: taken solely from the subscription's billing-period end (when the
-	// plan renews and credits reset). The credits-config weekly reset timestamp is
-	// intentionally NOT used as a fallback — an account with no active subscription
-	// has no recovery time.
-	reset := ""
-	sub, _ := c.FetchSubscription(ctx, token)
-	if sub != nil {
-		reset = strings.TrimSpace(sub.BillingPeriodEnd)
-	}
+	// 恢复时间: the credits-config weekly reset (when the free grant refills).
+	reset := strings.TrimSpace(resetUnix)
 	return map[string]any{
 		"remaining":   remaining,
 		"used":        used,
@@ -175,7 +170,7 @@ func (c *Client) FetchCreditsBalance(ctx context.Context, token string) (map[str
 
 // Subscription is the membership view parsed from GET /rest/subscriptions.
 type Subscription struct {
-	Member           bool   // an active subscription exists
+	Member           bool   // a subscription with status ACTIVE exists (INACTIVE entries don't count)
 	Tier             string // e.g. SUBSCRIPTION_TIER_GROK_PRO ("" for free)
 	Status           string // e.g. SUBSCRIPTION_STATUS_ACTIVE
 	BillingPeriodEnd string // RFC3339; when the plan renews / credits reset
@@ -183,7 +178,10 @@ type Subscription struct {
 }
 
 // FetchSubscription reads GET /rest/subscriptions and reports the account's
-// membership. An empty subscriptions array means a free account (Member=false).
+// membership. Member is true only when an entry with SUBSCRIPTION_STATUS_ACTIVE
+// exists: a lapsed membership keeps its entry but flips to
+// SUBSCRIPTION_STATUS_INACTIVE, and an empty array means never subscribed —
+// both read as Member=false (the entry's tier/status are still surfaced).
 // A 401/403 maps to ErrAuth; other transport/HTTP errors are returned so callers
 // can treat them as best-effort (they already have the credit balance).
 func (c *Client) FetchSubscription(ctx context.Context, token string) (*Subscription, error) {
@@ -229,15 +227,17 @@ func (c *Client) FetchSubscription(ctx context.Context, token string) (*Subscrip
 		return nil, fmt.Errorf("%w: subscriptions non-json", ErrTemporaryUpstream)
 	}
 	out := &Subscription{}
-	// Pick the active subscription (fall back to the first entry) as the membership.
+	// Surface the ACTIVE subscription if any (falling back to the first entry
+	// for tier/status info), but only an ACTIVE one sets Member.
 	for i, s := range body.Subscriptions {
-		if i == 0 || strings.EqualFold(s.Status, "SUBSCRIPTION_STATUS_ACTIVE") {
-			out.Member = true
+		active := strings.EqualFold(s.Status, "SUBSCRIPTION_STATUS_ACTIVE")
+		if i == 0 || active {
+			out.Member = active
 			out.Tier = strings.TrimSpace(s.Tier)
 			out.Status = strings.TrimSpace(s.Status)
 			out.BillingPeriodEnd = strings.TrimSpace(s.BillingPeriodEnd)
 			out.FreeTrial = s.ActiveOffer.FreeTrial != nil
-			if strings.EqualFold(s.Status, "SUBSCRIPTION_STATUS_ACTIVE") {
+			if active {
 				break
 			}
 		}

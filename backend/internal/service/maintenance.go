@@ -131,12 +131,14 @@ func (m *MaintenanceService) tick(ctx context.Context) {
 		log.Printf("maintenance: roll_reset: %v", err)
 	}
 
-	// 1b. Runway/grok tokens have no refresh — once the reset marker passes, mark
-	//     them dead directly instead of letting them 401 on next use. Runway's
-	//     marker is the JWT expiry; grok's is the credits reset (grok sso can't be
-	//     renewed either — 失效就失效 — so a purchased short-lived account that has
-	//     lapsed by its reset time is treated as dead rather than re-scheduled).
-	for _, pool := range []string{"runway", "grok"} {
+	// 1b. Runway tokens have no refresh — once the JWT expiry marker passes the
+	//     token can only 401, so flip it to disabled+dead proactively instead of
+	//     leaving a doomed account "active". Grok is intentionally NOT swept here:
+	//     its reset marker is billingPeriodEnd (a credits-renewal date), not a
+	//     death deadline — a grok sso keeps working past billingPeriodEnd, so
+	//     expiring on it kills live accounts. Grok death is caught for real by the
+	//     import-time FetchSession check and by marking dead on a 401 at use.
+	for _, pool := range []string{"runway"} {
 		if n, err := m.tokens.ExpireByReset(ctx, pool); err != nil {
 			log.Printf("maintenance: expire_%s: %v", pool, err)
 		} else if n > 0 {
@@ -155,6 +157,10 @@ func (m *MaintenanceService) tick(ctx context.Context) {
 		//     always-active account (never went 限额) would otherwise read 0 / 402
 		//     after each reset. Self-guarded + background; no-op once all are done.
 		m.tokenSvc.ActivateKreaDue(ctx)
+		// 1e. Re-validate grok accounts: an empty /rest/subscriptions (or 401)
+		//     means the membership lapsed → disable+dead; otherwise re-sync the
+		//     credits balance and 恢复时间 (from the credits' weekly reset).
+		m.tokenSvc.RefreshGrokLiveness(ctx)
 	}
 
 	// 2. Auto-renew Adobe cookies whose refresh interval has elapsed.

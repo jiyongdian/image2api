@@ -19,22 +19,23 @@ import (
 )
 
 const (
-	submitURL      = "https://firefly-3p.ff.adobe.io/v2/3p-images/generate-async"
+	submitURL       = "https://firefly-3p.ff.adobe.io/v2/3p-images/generate-async"
 	image5SubmitURL = "https://image-v5.ff.adobe.io/v1/images/generate-async"
-	videoSubmitURL = "https://firefly-3p.ff.adobe.io/v2/3p-videos/generate-async"
+	videoSubmitURL  = "https://firefly-3p.ff.adobe.io/v2/3p-videos/generate-async"
 	// Firefly-native video model (project id "firefly-video"): distinct host,
 	// submit path and storage host from the 3p (veo/luma) video flow.
 	fireflyVideoSubmitURL = "https://video-v1.ff.adobe.io/v2/videos/generate"
 	fireflyVideoUploadURL = "https://video-v1.ff.adobe.io/v2/storage/image"
-	uploadURL      = "https://firefly-3p.ff.adobe.io/v2/storage/image"
-	creditsURL     = "https://firefly.adobe.io/v1/credits/balance"
-	creditsAPIKey  = "SunbreakWebUI1"
+	uploadURL             = "https://firefly-3p.ff.adobe.io/v2/storage/image"
+	creditsURL            = "https://firefly.adobe.io/v1/credits/balance"
+	creditsAPIKey         = "SunbreakWebUI1"
 )
 
 var (
 	ErrAuth              = errors.New("adobe auth failed")
 	ErrQuotaExhausted    = errors.New("adobe quota exhausted")
 	ErrTemporaryUpstream = errors.New("adobe upstream temporary error")
+	ErrDeadUpstream      = errors.New("adobe upstream fatal error")
 )
 
 var profileURLs = []string{
@@ -193,6 +194,9 @@ func (c *Client) GenerateImage(ctx context.Context, token, modelID, prompt, aspe
 	}
 	// Preserve the temporary classification so the pool retries (overload / 5xx /
 	// rate-limit) instead of failing the request outright.
+	if errors.Is(lastErr, ErrDeadUpstream) {
+		return nil, nil, fmt.Errorf("%w: adobe submit: %s", ErrDeadUpstream, clip(lastBody, 300))
+	}
 	if errors.Is(lastErr, ErrTemporaryUpstream) {
 		return nil, nil, fmt.Errorf("%w: adobe submit: %s", ErrTemporaryUpstream, clip(lastBody, 300))
 	}
@@ -461,13 +465,13 @@ func (c *Client) submitImage(ctx context.Context, client tlsclient.HttpClient, t
 		}
 		return respBody, "", fmt.Errorf("%w (submit %d %s: %s)", ErrAuth, resp.StatusCode, resp.Header.Get("x-access-error"), clip(respBody, 300))
 	}
-	if resp.StatusCode == 429 || resp.StatusCode == 451 || resp.StatusCode >= 500 {
-		return respBody, "", ErrTemporaryUpstream
-	}
 	// "system under load" / timeout_error = adobe rate-limit/overload (can come on a
 	// non-5xx) — treat as temporary so the pool retries instead of failing.
 	if b := string(respBody); strings.Contains(b, "system under load") || strings.Contains(b, "timeout_error") {
 		return respBody, "", ErrTemporaryUpstream
+	}
+	if resp.StatusCode == 429 || resp.StatusCode == 451 || resp.StatusCode >= 500 {
+		return respBody, "", ErrDeadUpstream
 	}
 	if resp.StatusCode != 200 {
 		return respBody, "", errors.New("submit rejected")
@@ -529,8 +533,11 @@ func (c *Client) pollImage(ctx context.Context, client tlsclient.HttpClient, tok
 		if readErr != nil {
 			return nil, nil, readErr
 		}
-		if resp.StatusCode == 429 || resp.StatusCode == 451 || resp.StatusCode >= 500 {
+		if b := string(body); strings.Contains(b, "system under load") || strings.Contains(b, "timeout_error") {
 			return nil, nil, ErrTemporaryUpstream
+		}
+		if resp.StatusCode == 429 || resp.StatusCode == 451 || resp.StatusCode >= 500 {
+			return nil, nil, ErrDeadUpstream
 		}
 		if resp.StatusCode != 200 {
 			return nil, nil, fmt.Errorf("adobe poll failed: %d %s", resp.StatusCode, clip(body, 300))
@@ -633,7 +640,7 @@ func (c *Client) submitVideo(ctx context.Context, client tlsclient.HttpClient, t
 		return respBody, "", fmt.Errorf("%w (%d %s: %s)", ErrAuth, resp.StatusCode, resp.Header.Get("x-access-error"), clip(respBody, 300))
 	}
 	if resp.StatusCode == 408 || resp.StatusCode == 429 || resp.StatusCode == 451 || resp.StatusCode >= 500 {
-		return respBody, "", ErrTemporaryUpstream
+		return respBody, "", ErrDeadUpstream
 	}
 	// "system under load" / timeout_error = adobe overload — treat as a temporary
 	// error so the tempFailover policy moves to the next account (same as the image path).
@@ -703,8 +710,11 @@ func (c *Client) pollVideo(ctx context.Context, client tlsclient.HttpClient, tok
 		if resp.StatusCode == 401 || resp.StatusCode == 403 {
 			return nil, nil, fmt.Errorf("%w (%d %s: %s)", ErrAuth, resp.StatusCode, resp.Header.Get("x-access-error"), clip(body, 300))
 		}
-		if resp.StatusCode == 429 || resp.StatusCode == 451 || resp.StatusCode >= 500 {
+		if b := string(body); strings.Contains(b, "system under load") || strings.Contains(b, "timeout_error") {
 			return nil, nil, ErrTemporaryUpstream
+		}
+		if resp.StatusCode == 429 || resp.StatusCode == 451 || resp.StatusCode >= 500 {
+			return nil, nil, ErrDeadUpstream
 		}
 		if resp.StatusCode != 200 {
 			return nil, nil, fmt.Errorf("adobe video poll failed: %d %s", resp.StatusCode, clip(body, 300))
