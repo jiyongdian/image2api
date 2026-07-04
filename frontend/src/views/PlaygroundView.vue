@@ -69,7 +69,7 @@ const models = computed(() =>
   allModels.value.filter((m) => m.enabled !== false && m.type === mode.value),
 )
 const modelOptions = computed(() =>
-  models.value.map((m) => ({ value: m.id, label: m.name || m.id })),
+  models.value.map((m) => ({ value: m.id, label: m.alias || m.name || m.id })),
 )
 const model = computed(() => allModels.value.find((m) => m.id === modelId.value) || null)
 const familyPreset = computed(() => {
@@ -305,7 +305,7 @@ async function fireOne() {
   // user edits the form (or fires another batch) while this one runs.
   const task = {
     id: Math.random().toString(36).slice(2, 10),
-    model: modelId.value,
+    model: model.value?.alias || modelId.value,
     kind: mode.value,
     prompt: prompt.value,
     ratio: ratio.value,
