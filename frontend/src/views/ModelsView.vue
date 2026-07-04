@@ -165,7 +165,7 @@ onMounted(loadModels)
             <td class="px-5 py-3.5 align-middle min-w-0">
               <div class="flex items-start gap-2 min-w-0">
                 <div class="font-mono text-xs text-white/90 truncate" :title="m.id">{{ m.id }}</div>
-                <span v-if="m.alias" class="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] bg-sky-500/10 text-sky-300 ring-1 ring-sky-400/20 shrink-0">别名: {{ m.alias }}</span>
+                <span v-if="m.alias" class="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] bg-sky-500/10 text-sky-300 ring-1 ring-sky-400/20 shrink-0">{{ m.alias }}</span>
               </div>
               <div class="mt-1 text-[10px] text-white/45 capitalize truncate">{{ m.provider || '—' }}</div>
             </td>

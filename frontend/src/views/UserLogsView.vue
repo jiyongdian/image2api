@@ -212,7 +212,7 @@ onUnmounted(() => {
                :title="e.prompt ? '点击复制提示词' : ''"
                @click.stop="copyPrompt(e)">{{ e.prompt }}</div>
           <div class="text-[10px] text-white/55 flex items-center justify-between gap-2 tabular-nums">
-            <span class="truncate" :title="e.model || ''">{{ e.model || '—' }}</span>
+            <span class="break-all" :title="e.model || ''">{{ e.model || '—' }}</span>
             <span class="shrink-0 flex items-center gap-1">
               <span v-if="e.resolution" class="text-emerald-300/90">{{ e.resolution }}</span>
               <span v-if="e.ratio" class="text-white/40">{{ e.ratio }}</span>

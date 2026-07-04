@@ -428,6 +428,10 @@ func (s *AdminReadService) Images(ctx context.Context, limit, offset int, kind s
 	if err != nil {
 		return nil, 0, nil, err
 	}
+	nameMap, err := s.models.NameMap(ctx)
+	if err != nil {
+		return nil, 0, nil, err
+	}
 	out := make([]map[string]any, 0, len(page))
 	for _, item := range page {
 		row := map[string]any{
@@ -443,7 +447,11 @@ func (s *AdminReadService) Images(ctx context.Context, limit, offset int, kind s
 		}
 		if event, ok := index[item.Name]; ok {
 			row["prompt"] = event.Prompt
-			row["model"] = event.Model
+			if eff, ok := nameMap[event.Model]; ok && eff != "" {
+				row["model"] = eff
+			} else {
+				row["model"] = event.Model
+			}
 			row["resolution"] = event.Resolution
 			row["ratio"] = event.Ratio
 			row["duration"] = event.Duration
