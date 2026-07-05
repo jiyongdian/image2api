@@ -196,13 +196,25 @@ func (s *AdminReadService) Stats(ctx context.Context) (map[string]any, error) {
 		return nil, err
 	}
 	recentFiles, _ := s.RecentImages(ctx, 24)
-	files, fileStats, _ := s.scanGeneratedFiles(ctx)
+	files, _, _ := s.scanGeneratedFiles(ctx)
+	// Exclude homepage showcase media so 已生成作品 matches the 作品管理 total.
+	pinned := map[string]struct{}{}
+	if s.showcase != nil {
+		if set, perr := s.showcase.PublicFileSet(ctx); perr == nil {
+			pinned = set
+		}
+	}
+	var count int
 	var size int64
-	if v, ok := fileStats["size_bytes"].(int64); ok {
-		size = v
+	for _, f := range files {
+		if _, ok := pinned[strings.TrimLeft(f.Name, "/")]; ok {
+			continue
+		}
+		count++
+		size += f.Size
 	}
 	return map[string]any{
-		"generated_count":      len(files),
+		"generated_count":      count,
 		"generated_size_bytes": size,
 		"recent":               recentFiles,
 		"avg_elapsed_ms":       stats.AvgElapsedMS,
