@@ -22,8 +22,8 @@ const nav = computed(() => {
     items.push({ to: '/orders', label: '订单', icon: 'receipt' })
   }
   // 文档 + 关于 are public — visible to guests too.
-  items.push({ to: '/docs', label: '文档', icon: 'log' })
-  items.push({ to: '/about', label: '关于', icon: 'accounts' })
+  items.push({ to: '/docs', label: '文档', icon: 'book' })
+  items.push({ to: '/about', label: '关于', icon: 'info' })
   return items
 })
 
