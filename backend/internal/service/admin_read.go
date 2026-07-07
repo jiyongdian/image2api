@@ -256,7 +256,23 @@ func (s *AdminReadService) Dashboard(ctx context.Context) (map[string]any, error
 	now := time.Now()
 	dayCut := now.Add(-24 * time.Hour)
 	weekCut := now.Add(-3 * 24 * time.Hour) // "week" key = last 3 days (per admin request)
+	// "today" = since local midnight (Asia/Shanghai, the app's business tz), not a
+	// rolling 24h — so 今日消耗/生成 resets at 00:00 the way the admin expects.
+	loc, lerr := time.LoadLocation("Asia/Shanghai")
+	if lerr != nil {
+		loc = time.Local
+	}
+	nowLocal := now.In(loc)
+	todayCut := time.Date(nowLocal.Year(), nowLocal.Month(), nowLocal.Day(), 0, 0, 0, 0, loc)
 
+	today, err := s.events.WindowStats(ctx, todayCut)
+	if err != nil {
+		return nil, err
+	}
+	todayDau, err := s.events.DistinctUsersSince(ctx, todayCut)
+	if err != nil {
+		return nil, err
+	}
 	day, err := s.events.WindowStats(ctx, dayCut)
 	if err != nil {
 		return nil, err
@@ -345,6 +361,8 @@ func (s *AdminReadService) Dashboard(ctx context.Context) (map[string]any, error
 	}
 
 	return map[string]any{
+		"today":          today,
+		"today_dau":      todayDau,
 		"day":            day,
 		"week":           week,
 		"prev_day_total": prevDay,

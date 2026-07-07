@@ -12,11 +12,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const (
-	defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
-	defaultSecCHUA   = `"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"`
-)
-
 func stringValue(v any) string {
 	switch x := v.(type) {
 	case string:
