@@ -449,7 +449,7 @@ func (c *Client) uploadReferenceImages(ctx context.Context, session tlsclient.Ht
 
 func imageModelSlug(model string) string {
 	if strings.EqualFold(strings.TrimSpace(model), "gpt-image-2") {
-		return "gpt-5-3"
+		return "gpt-5-5-thinking"
 	}
 	return "auto"
 }
@@ -820,6 +820,28 @@ func (c *Client) startImageGeneration(ctx context.Context, session tlsclient.Htt
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 8*1024*1024)
 	var chunks []string
+	sseStart := time.Now()
+	// Watchdog: once the conversation id is known, the stream may go silent
+	// without ever emitting the async marker, leaving scanner.Scan() blocked on
+	// a read for the whole ctx budget. Closing the body unblocks the read so the
+	// loop exits and we fall through to polling.
+	convFound := make(chan struct{})
+	watchdogDone := make(chan struct{})
+	defer close(watchdogDone)
+	go func() {
+		select {
+		case <-convFound:
+		case <-watchdogDone:
+			return
+		}
+		timer := time.NewTimer(sseAsyncGrace)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			resp.Body.Close()
+		case <-watchdogDone:
+		}
+	}()
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data:") {
@@ -836,6 +858,7 @@ func (c *Client) startImageGeneration(ctx context.Context, session tlsclient.Htt
 		if conversationID == "" {
 			if match := conversationIDRE.FindStringSubmatch(payload); len(match) >= 2 {
 				conversationID = match[1]
+				close(convFound)
 			}
 		}
 		newFiles, newSeds := scanForIDs(payload)
@@ -850,7 +873,12 @@ func (c *Client) startImageGeneration(ctx context.Context, session tlsclient.Htt
 		// conversation id there is nothing more to read here, so stop instead of
 		// holding the SSE open until [DONE] (a stalled stream would otherwise burn
 		// the whole generation budget and surface as "context deadline exceeded").
-		if asyncStarted && conversationID != "" {
+		//
+		// The async marker normally arrives within ~1s of the conversation id. We
+		// still only wait a short grace for it (the watchdog above unblocks a
+		// silent stream) so a request that never engages the async pipeline is
+		// detected quickly instead of burning the whole budget.
+		if conversationID != "" && (asyncStarted || time.Since(sseStart) >= sseAsyncGrace) {
 			break
 		}
 	}
@@ -862,6 +890,17 @@ func (c *Client) startImageGeneration(ctx context.Context, session tlsclient.Htt
 	}
 	if conversationID == "" {
 		return "", nil, nil, errors.New("chatgpt SSE closed without conversation_id")
+	}
+	// Intermittently (~10% on gpt-5-5-thinking) the stream returns a conversation
+	// id but never emits the async pipeline marker and no image is ever produced —
+	// polling such a conversation only burns the whole budget and surfaces as the
+	// non-retryable "image poll timeout". The async marker is the reliable "the
+	// image generation task actually started" signal, so when it is absent (and
+	// nothing was streamed inline) treat the attempt as a transient upstream
+	// failure. That is retryable: a fresh submission reliably engages the pipeline,
+	// so the pool's same-account retry recovers instead of failing the request.
+	if !asyncStarted && len(fileIDs) == 0 && len(sedimentIDs) == 0 {
+		return "", nil, nil, fmt.Errorf("%w: image generation did not start (no async marker)", ErrTemporaryUpstream)
 	}
 	return conversationID, fileIDs, sedimentIDs, nil
 }
