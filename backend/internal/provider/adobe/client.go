@@ -795,7 +795,14 @@ func (c *Client) pollVideo(ctx context.Context, sess *tlsSession, token, pollURL
 // asset is already produced at this point, so a transient network hiccup
 // (connection EOF/reset mid-body, S3 accelerate 5xx) must not fail the whole
 // generation — retry with backoff before giving up.
-func (c *Client) download(ctx context.Context, sess *tlsSession, url string) ([]byte, error) {
+const downloadTimeout = 3 * time.Minute
+
+func (c *Client) download(parent context.Context, sess *tlsSession, url string) ([]byte, error) {
+	// The artifact is already produced; detach from the (often nearly-elapsed)
+	// generation ctx deadline/cancel and give the download its own budget so a
+	// slow CDN read isn't killed mid-body and the backoff-retries can actually run.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), downloadTimeout)
+	defer cancel()
 	var data []byte
 	var err error
 	for _, wait := range []time.Duration{0, 1 * time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second} {
