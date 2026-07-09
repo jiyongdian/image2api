@@ -139,7 +139,8 @@ function tierPrice(normalMap, agentMap, key) {
   return Number(n)
 }
 // 去AI特征 per-tier surcharge (loaded from /deai-pricing; defaults 1/2/3 分).
-const deaiPricing = ref({ price_1k: 1, price_2k: 2, price_4k: 3 })
+const deaiPricing = ref({ enabled: false, price_1k: 1, price_2k: 2, price_4k: 3 })
+const deaiEnabled = computed(() => !!deaiPricing.value.enabled)
 const deaiSurcharge = computed(() => {
   const key = { '1K': 'price_1k', '2K': 'price_2k', '4K': 'price_4k' }[resolution.value] || 'price_1k'
   return Number(deaiPricing.value[key] ?? 0)
@@ -155,7 +156,7 @@ const price = computed(() => {
   }
   const base = tierPrice(m.prices, m.prices_agent, resolution.value)
   if (base == null) return null
-  return base + (deai.value ? deaiSurcharge.value : 0)
+  return base + (deaiEnabled.value && deai.value ? deaiSurcharge.value : 0)
 })
 const priceLabel = computed(() => price.value == null ? '—' : pointsLabel(price.value))
 const canAfford = computed(() => price.value == null || credits.value >= price.value)
@@ -402,7 +403,7 @@ async function fireOne() {
     ratio: ratio.value,
     resolution: resolution.value,
     duration: mode.value === 'video' ? duration.value : '',
-    deai: mode.value === 'image' ? deai.value : false,
+    deai: mode.value === 'image' && deaiEnabled.value ? deai.value : false,
     status: 'pending',
     url: '',
     error: '',
@@ -697,7 +698,7 @@ onUnmounted(() => {
       </div>
 
       <!-- 去AI特征 (image only): opt-in post-processing with a per-tier surcharge -->
-      <div v-if="mode === 'image'" class="flex items-center justify-between">
+      <div v-if="mode === 'image' && deaiEnabled" class="flex items-center justify-between">
         <label class="text-xs font-medium text-slate-500">
           去AI特征
           <span class="text-slate-400 font-normal">(+{{ deaiSurcharge }} 积分)</span>

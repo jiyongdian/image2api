@@ -418,6 +418,11 @@ func (s *V1Service) prepareImageExecution(ctx context.Context, principal *APIPri
 			return nil, err
 		}
 	}
+	// 去AI特征 is gated by a system-settings switch (default off) — drop the
+	// flag when disabled so no surcharge is charged and no processing runs.
+	if in.DeAI && !s.deaiEnabled(ctx) {
+		in.DeAI = false
+	}
 	genCtx, cancel := context.WithTimeout(ctx, 8*time.Minute)
 	defer cancel()
 
@@ -2879,6 +2884,19 @@ func guessRatio(w, h int) string {
 // firstPricedResolution returns the model's lowest priced image tier (1K/2K/4K
 // order), or "" if none is priced. Used to rescue a request whose resolution
 // the model doesn't support.
+// deaiEnabled reports whether the 去AI特征 feature is switched on in system
+// settings (default off). When off, an incoming deai flag is ignored entirely.
+func (s *V1Service) deaiEnabled(ctx context.Context) bool {
+	if s.settings == nil {
+		return false
+	}
+	raw, err := s.settings.GetValue(ctx, "deai.enabled")
+	if err != nil {
+		return false
+	}
+	return parseBoolSetting(raw, false)
+}
+
 // deaiSurcharge returns the 去AI特征 surcharge (积分) for an image resolution
 // tier, from site settings (defaults: 1K=1, 2K=2, 4K=3).
 func (s *V1Service) deaiSurcharge(ctx context.Context, resolution string) float64 {

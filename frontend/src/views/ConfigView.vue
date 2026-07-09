@@ -121,7 +121,7 @@ const credits = reactive({ checkin_enabled: true, checkin_reward: 3, invite_enab
 const credBusy = ref(false); const credSaved = ref(false)
 
 // ---- deai (去AI特征 附加价格) ----
-const deaiCfg = reactive({ price_1k: 1, price_2k: 2, price_4k: 3 })
+const deaiCfg = reactive({ enabled: false, price_1k: 1, price_2k: 2, price_4k: 3 })
 const deaiBusy = ref(false); const deaiSaved = ref(false)
 async function loadDeai() {
   const r = await api('/settings/deai')
@@ -130,6 +130,7 @@ async function loadDeai() {
 async function saveDeai() {
   deaiBusy.value = true; deaiSaved.value = false
   const r = await api('/settings/deai', jsonBody('PUT', {
+    enabled: !!deaiCfg.enabled,
     price_1k: Number(deaiCfg.price_1k) || 0,
     price_2k: Number(deaiCfg.price_2k) || 0,
     price_4k: Number(deaiCfg.price_4k) || 0,
@@ -489,14 +490,18 @@ onMounted(() => { loadSite(); loadReg(); loadSmtp(); loadCredits(); loadAnnounce
       <p class="text-xs text-slate-400 mb-4">画图台开启「去AI特征」后,按画质档位在模型价格之上额外扣除的积分。仅对图片生成生效。</p>
       <div class="space-y-3">
         <label class="row">
+          <span><span class="lbl">开启去AI特征</span><span class="hint">关闭后画图台不显示该选项,也不会加价。默认关闭。</span></span>
+          <input type="checkbox" v-model="deaiCfg.enabled" class="sw" />
+        </label>
+        <label class="row" :class="!deaiCfg.enabled && 'opacity-50'">
           <span><span class="lbl">1K 附加价格</span><span class="hint">默认 1 积分。</span></span>
           <input type="number" min="0" v-model.number="deaiCfg.price_1k" class="num" />
         </label>
-        <label class="row">
+        <label class="row" :class="!deaiCfg.enabled && 'opacity-50'">
           <span><span class="lbl">2K 附加价格</span><span class="hint">默认 2 积分。</span></span>
           <input type="number" min="0" v-model.number="deaiCfg.price_2k" class="num" />
         </label>
-        <label class="row">
+        <label class="row" :class="!deaiCfg.enabled && 'opacity-50'">
           <span><span class="lbl">4K 附加价格</span><span class="hint">默认 3 积分。</span></span>
           <input type="number" min="0" v-model.number="deaiCfg.price_4k" class="num" />
         </label>
@@ -678,7 +683,8 @@ html.dark .num, html.dark .txt, html.dark .field {
   box-shadow: 0 0 0 3px rgb(167 139 250 / 0.15);
 }
 .num:disabled, .txt:disabled, .field:disabled { opacity: 0.45; cursor: not-allowed; }
-.num { width: 6rem; padding: 0.4rem 0.55rem; font-size: 0.8rem; text-align: right; }
+.num { width: 6rem; padding: 0.4rem 0.55rem; font-size: 0.8rem; text-align: right; -moz-appearance: textfield; appearance: textfield; }
+.num::-webkit-outer-spin-button, .num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .txt { width: 16rem; max-width: 60%; padding: 0.4rem 0.65rem; font-size: 0.8rem; }
 .field { width: 100%; padding: 0.55rem 0.75rem; font-size: 0.85rem; }
 
