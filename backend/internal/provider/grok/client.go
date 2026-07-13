@@ -458,14 +458,14 @@ func fetchStatsigChallenge(ctx context.Context, client tlsclient.HttpClient, tok
 		seedB64:    mm[1],
 		curvesJSON: string(curvesJSON),
 	}
-	// Best-effort static derivation (the old hand-ported algorithm) as fallback.
-	if seed, err := decodeStatsigSeed(mm[1]); err == nil {
-		if tail, err := computeStatsigTail(seed, curves); err == nil {
-			ch.header = append([]byte{0x00}, seed...)
-			ch.suffix = statsigSaltPrefix + tail
-			ch.trailer = defaultStatsigTrailer
-		}
-	}
+	// NOTE: the old hand-ported per-session derivation (0x00+seed header +
+	// computeStatsigTail salt) is intentionally NOT applied here. Verified
+	// 2026-07-13 against /rest/app-chat/conversations/new: that dynamic token is
+	// rejected ("Request rejected by anti-bot rules.", 403), while the static
+	// (header, salt) defaults are accepted (200) — so we keep the static values
+	// as the fallback. When the goja signer (ensureEngine above) locates and
+	// verifies grok's own chunk it still takes over via seedB64/curvesJSON in
+	// statsigID; computeStatsigTail is retained only for reference/tests.
 	return ch, nil
 }
 
