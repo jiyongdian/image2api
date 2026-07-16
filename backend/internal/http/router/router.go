@@ -157,6 +157,7 @@ func New(cfg *config.Config, auth *service.AuthService, handlers Handlers) *gin.
 		authed.DELETE("/managed-models/:model_id", handlers.AdminWrite.DeleteModel)
 		authed.DELETE("/logs", handlers.AdminWrite.ClearLogs)
 		authed.DELETE("/logs/pending", handlers.AdminWrite.ClearPendingLogs)
+		authed.GET("/showcase/admin", handlers.Showcase.AdminList)
 		authed.POST("/showcase", handlers.AdminWrite.CreateShowcase)
 		authed.PATCH("/showcase/:entry_id", handlers.AdminWrite.UpdateShowcase)
 		authed.DELETE("/showcase/:entry_id", handlers.AdminWrite.DeleteShowcase)

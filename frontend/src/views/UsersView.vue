@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { api, jsonBody } from '../api'
 import { fmtTs, fmtDate, fmtClock } from '../utils/format'
 import Icon from '../components/Icon.vue'
@@ -15,6 +15,7 @@ const statusFilter = ref('')    // '' | 'active' | 'disabled'
 
 const page = ref(1)
 const pageSize = ref(20)
+const total = ref(0)
 
 const showAdd = ref(false)
 const editing = ref(null)
@@ -59,41 +60,41 @@ async function loadGroups() {
 
 async function load() {
   loading.value = true
-  const r = await api('/users')
+  const qs = new URLSearchParams({
+    limit: String(pageSize.value),
+    offset: String((page.value - 1) * pageSize.value),
+  })
+  if (roleFilter.value) qs.set('role', roleFilter.value)
+  if (statusFilter.value) qs.set('status', statusFilter.value)
+  if (search.value.trim()) qs.set('q', search.value.trim())
+  const r = await api('/users?' + qs.toString())
   items.value = r.data?.data || []
+  total.value = Number(r.data?.total ?? items.value.length)
   stats.value = r.data?.stats || stats.value
   loading.value = false
 }
 onMounted(() => { load(); loadGroups() })
 
-const filtered = computed(() => {
-  const q = search.value.trim().toLowerCase()
-  // Newest first — created_at desc, falling back to id so users without a
-  // timestamp still get a stable order.
-  const sorted = [...items.value].sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
-  return sorted.filter((u) => {
-    if (roleFilter.value && u.role !== roleFilter.value) return false
-    if (statusFilter.value && u.status !== statusFilter.value) return false
-    if (q && !(
-      (u.email || '').toLowerCase().includes(q) ||
-      (u.name || '').toLowerCase().includes(q) ||
-      (u.id || '').toLowerCase().includes(q)
-    )) return false
-    return true
-  })
-})
+// Server-side pagination: items IS the current page (filter/搜索/排序均在后端)。
+const filtered = computed(() => items.value)
+const pagedItems = computed(() => items.value)
 
-// Client-side pagination — user list is bounded.
-const totalPages = computed(() => Math.max(1, Math.ceil(filtered.value.length / pageSize.value)))
-const pagedItems = computed(() => {
-  const start = (page.value - 1) * pageSize.value
-  return filtered.value.slice(start, start + pageSize.value)
-})
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
 function goPage(n) {
   const target = Math.max(1, Math.min(totalPages.value, n))
   if (target !== page.value) page.value = target
 }
-function setFilter(fn) { fn(); page.value = 1 }
+watch(page, () => { load() })
+function setFilter(fn) { fn(); resetAndLoad() }
+function resetAndLoad() {
+  if (page.value !== 1) page.value = 1
+  else load()
+}
+let searchTimer = null
+watch(search, () => {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => { resetAndLoad() }, 300)
+})
 const pageNumbers = computed(() => {
   const n = totalPages.value
   const cur = page.value
@@ -272,8 +273,8 @@ async function doRecharge() {
         <span class="w-14 h-14 rounded-2xl bg-white/[0.04] grid place-items-center">
           <Icon name="accounts" class="w-6 h-6" />
         </span>
-        <span class="text-sm">{{ items.length ? '没有匹配的用户' : '还没有用户' }}</span>
-        <button v-if="!items.length" @click="showAdd = true" class="btn-soft mt-1">新建第一个</button>
+        <span class="text-sm">{{ stats.total ? '没有匹配的用户' : '还没有用户' }}</span>
+        <button v-if="!stats.total" @click="showAdd = true" class="btn-soft mt-1">新建第一个</button>
       </div>
 
       <div v-else class="overflow-x-auto">
@@ -410,8 +411,8 @@ async function doRecharge() {
       <div v-if="!loading && totalPages > 1"
            class="flex items-center justify-between gap-3 border-t border-white/[0.06] px-5 py-3 text-xs text-white/55">
         <div>
-          <span class="tabular-nums text-white/85">{{ (page - 1) * pageSize + 1 }}–{{ Math.min(filtered.length, page * pageSize) }}</span>
-          <span class="ml-1">/ {{ filtered.length }} 条</span>
+          <span class="tabular-nums text-white/85">{{ (page - 1) * pageSize + 1 }}–{{ Math.min(total, page * pageSize) }}</span>
+          <span class="ml-1">/ {{ total }} 条</span>
         </div>
         <div class="flex items-center gap-1">
           <template v-for="(n, i) in pageNumbers" :key="i">
