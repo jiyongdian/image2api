@@ -392,7 +392,7 @@ func (c *Client) ensureChallenge(ctx context.Context, client tlsclient.HttpClien
 	if fresh {
 		return
 	}
-	ch, err := fetchStatsigChallenge(ctx, client, token)
+	ch, err := fetchStatsigChallenge(ctx, client)
 	if err != nil {
 		// Silent fallback to static defaults is the #1 cause of a recurring
 		// "403 anti-bot": the homepage structure changed and we never notice.
@@ -409,7 +409,15 @@ func (c *Client) ensureChallenge(ctx context.Context, client tlsclient.HttpClien
 
 // fetchStatsigChallenge does a browser-free homepage GET and derives a
 // self-consistent (header, salt) pair: header = 0x00 + seed, salt = prefix + F.
-func fetchStatsigChallenge(ctx context.Context, client tlsclient.HttpClient, token string) (statsigChallenge, error) {
+//
+// The request is ANONYMOUS (no sso cookie): grok redirects a request carrying an
+// sso cookie to the sign-in page, whose HTML omits the anti-bot seed <meta> and
+// the curves array — so a cookied fetch silently loses the challenge inputs and
+// statsigID falls back to the stale static recipe (403 anti-bot). The seed/curves
+// are per-build and account-independent (the seed is transmitted inside the
+// x-statsig-id header the server re-verifies), so the anonymous landing page is
+// the reliable source for every session.
+func fetchStatsigChallenge(ctx context.Context, client tlsclient.HttpClient) (statsigChallenge, error) {
 	req, err := http.NewRequest(http.MethodGet, apiBase+"/", nil)
 	if err != nil {
 		return statsigChallenge{}, err
@@ -419,8 +427,7 @@ func fetchStatsigChallenge(ctx context.Context, client tlsclient.HttpClient, tok
 		"accept":            {"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
 		"accept-language":   {"en-US,en;q=0.9"},
 		"user-agent":        {userAgent},
-		"cookie":            {"sso=" + token + "; sso-rw=" + token},
-		http.HeaderOrderKey: {"accept", "accept-language", "user-agent", "cookie"},
+		http.HeaderOrderKey: {"accept", "accept-language", "user-agent"},
 	}
 	resp, err := client.Do(req)
 	if err != nil {
