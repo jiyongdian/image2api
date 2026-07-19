@@ -122,21 +122,47 @@ func (c *Client) GenerateImage(ctx context.Context, baseURL, apiKey, model, prom
 
 // GenerateVideo drives the upstream Sora-style async video API:
 // POST /v1/videos → poll GET /v1/videos/{id} → GET /v1/videos/{id}/content.
-// When downloadResult is false it returns the upstream content URL instead.
-func (c *Client) GenerateVideo(ctx context.Context, baseURL, apiKey, model, prompt, size string, seconds int, downloadResult bool) ([]byte, string, error) {
+// Reference frames (image-to-video / first-last frames) are sent as multipart
+// input_reference[] files, matching the OpenAI videos API. When downloadResult
+// is false it returns the upstream content URL instead.
+func (c *Client) GenerateVideo(ctx context.Context, baseURL, apiKey, model, prompt, size string, seconds int, frames [][]byte, downloadResult bool) ([]byte, string, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" || apiKey == "" {
 		return nil, "", ErrAuth
 	}
-	payload := map[string]any{"model": model, "prompt": prompt}
-	if size != "" {
-		payload["size"] = size
+	var created map[string]any
+	var err error
+	if len(frames) > 0 {
+		body := &bytes.Buffer{}
+		w := multipart.NewWriter(body)
+		_ = w.WriteField("model", model)
+		_ = w.WriteField("prompt", prompt)
+		if size != "" {
+			_ = w.WriteField("size", size)
+		}
+		if seconds > 0 {
+			_ = w.WriteField("seconds", fmt.Sprintf("%d", seconds))
+		}
+		for i, f := range frames {
+			fw, e := w.CreateFormFile("input_reference[]", fmt.Sprintf("frame_%d.png", i+1))
+			if e != nil {
+				return nil, "", e
+			}
+			_, _ = fw.Write(f)
+		}
+		_ = w.Close()
+		created, err = c.doMultipart(ctx, baseURL+"/v1/videos", apiKey, body, w.FormDataContentType())
+	} else {
+		payload := map[string]any{"model": model, "prompt": prompt}
+		if size != "" {
+			payload["size"] = size
+		}
+		if seconds > 0 {
+			payload["seconds"] = fmt.Sprintf("%d", seconds)
+		}
+		raw, _ := json.Marshal(payload)
+		created, err = c.doJSON(ctx, http.MethodPost, baseURL+"/v1/videos", apiKey, raw)
 	}
-	if seconds > 0 {
-		payload["seconds"] = fmt.Sprintf("%d", seconds)
-	}
-	raw, _ := json.Marshal(payload)
-	created, err := c.doJSON(ctx, http.MethodPost, baseURL+"/v1/videos", apiKey, raw)
 	if err != nil {
 		return nil, "", err
 	}
@@ -197,6 +223,33 @@ func (c *Client) doJSON(ctx context.Context, method, url, apiKey string, body []
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	resp, err := httpClient().Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrTemporaryUpstream, sanitizeErr(err))
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if e := mapStatus(resp.StatusCode, raw); e != nil {
+		return nil, e
+	}
+	var out map[string]any
+	if len(raw) == 0 {
+		return map[string]any{}, nil
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("%w: non-json: %s", ErrTemporaryUpstream, clip(raw, 120))
+	}
+	return out, nil
+}
+
+func (c *Client) doMultipart(ctx context.Context, url, apiKey string, body io.Reader, contentType string) (map[string]any, error) {
+	req, err := http.NewRequest(http.MethodPost, url, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", contentType)
 	resp, err := httpClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrTemporaryUpstream, sanitizeErr(err))

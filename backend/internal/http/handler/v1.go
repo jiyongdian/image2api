@@ -147,6 +147,10 @@ func (h *V1Handler) CreateVideo(c *gin.Context) {
 			Prompt  string          `json:"prompt"`
 			Seconds json.RawMessage `json:"seconds"`
 			Size    string          `json:"size"`
+			// Reference frames (image-to-video / first-last frames) as base64 or
+			// data-URI strings — the JSON equivalent of multipart input_reference.
+			InputReference  []string `json:"input_reference"`
+			ReferenceImages []string `json:"reference_images"`
 		}
 		if err := c.ShouldBindJSON(&body); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid request body"})
@@ -154,6 +158,7 @@ func (h *V1Handler) CreateVideo(c *gin.Context) {
 		}
 		modelID, prompt, size = body.Model, body.Prompt, body.Size
 		seconds = rawToString(body.Seconds)
+		refs = append(body.InputReference, body.ReferenceImages...)
 	}
 	duration := strings.TrimSpace(seconds)
 	if duration != "" && !strings.HasSuffix(duration, "s") {

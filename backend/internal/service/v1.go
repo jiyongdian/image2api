@@ -1989,6 +1989,12 @@ func (s *V1Service) generateCustomVideo(ctx context.Context, eventID string, mod
 		return nil, "", ErrNoProviderAccount
 	}
 	size := upstreamVideoSize(aspectRatio, resolution)
+	// Optional reference frames (image-to-video / first-last frames) — forwarded
+	// to the upstream as multipart input_reference[] files.
+	frames, err := decodeReferenceImages(in.ReferenceImages, max(1, modelItem.MaxReferenceImages))
+	if err != nil {
+		return nil, "", err
+	}
 	var lastErr error
 	var videoURL string
 	busy := 0
@@ -2003,7 +2009,7 @@ func (s *V1Service) generateCustomVideo(ctx context.Context, eventID string, mod
 			_ = s.events.SetAccount(ctx, eventID, token.ID, token.AccountEmail)
 			_ = s.tokens.TouchLastUsed(ctx, token.ID)
 			baseURL := stringValue(token.Meta["base_url"])
-			d, url, genErr := s.custom.GenerateVideo(ctx, baseURL, token.Value, modelItem.ID, in.Prompt, size, durationSeconds, downloadResult)
+			d, url, genErr := s.custom.GenerateVideo(ctx, baseURL, token.Value, modelItem.ID, in.Prompt, size, durationSeconds, frames, downloadResult)
 			if genErr == nil {
 				_, _ = s.tokens.Update(ctx, "custom", token.ID, map[string]any{
 					"last_used_at": time.Now(), "success_total": gorm.Expr("success_total + 1"), "fails": 0,
