@@ -443,7 +443,6 @@ func (s *V1Service) prepareImageExecution(ctx context.Context, principal *APIPri
 		return nil, err
 	}
 	refCount := len(in.ReferenceImages)
-	refFiles := s.saveReferenceImages(ctx, principal, in.ReferenceImages)
 	// API-key (source "v1") requests don't persist the output: we return the image
 	// as base64 inline (OpenAI gpt-image-1 also returns only b64_json) and never
 	// upload to RustFS, so there's no URL. The event is still logged (empty file)
@@ -460,18 +459,14 @@ func (s *V1Service) prepareImageExecution(ctx context.Context, principal *APIPri
 	// ({base}/v1/images/{eventID}/content) that re-fetches with the account token.
 	var upstreamURL string
 	var gatedURL bool
-	eventID, err := s.logPendingEvent(ctx, "image", modelItem, principal, in.Prompt, aspectRatio, resolution, "", refCount, price, relativePath, source, refFiles, in.DeAI)
+	eventID, err := s.logPendingEvent(ctx, "image", modelItem, principal, in.Prompt, aspectRatio, resolution, "", refCount, price, relativePath, source, nil, in.DeAI)
 	if err != nil {
-		s.cleanupReferenceImages(ctx, "", refFiles)
 		return nil, err
 	}
 	// Register so the maintenance sweep can cancel this generation if it abandons
 	// the row; deregister on return.
 	s.inflight.Add(eventID, cancel)
 	defer s.inflight.Done(eventID)
-	// Reference images are transient — remove them (and clear the event's ref
-	// paths) once this attempt finishes, whether it succeeds OR fails.
-	defer s.cleanupReferenceImages(ctx, eventID, refFiles)
 	startedAt := time.Now()
 
 	var imageBytes []byte
@@ -736,7 +731,6 @@ func (s *V1Service) prepareVideoExecution(ctx context.Context, principal *APIPri
 		return nil, err
 	}
 	refCount := len(in.ReferenceImages)
-	refFiles := s.saveReferenceImages(ctx, principal, in.ReferenceImages)
 	// API-key (source "v1") requests return base64 inline and never persist a
 	// file — see prepareImageExecution for the rationale.
 	noStore := source == "v1"
@@ -744,17 +738,14 @@ func (s *V1Service) prepareVideoExecution(ctx context.Context, principal *APIPri
 	if !noStore {
 		fileURL, relativePath = s.allocateOutput(principal, "mp4", in.BaseURL)
 	}
-	eventID, err := s.logPendingEvent(ctx, "video", modelItem, principal, in.Prompt, aspectRatio, resolution, duration, refCount, price, relativePath, source, refFiles, false)
+	eventID, err := s.logPendingEvent(ctx, "video", modelItem, principal, in.Prompt, aspectRatio, resolution, duration, refCount, price, relativePath, source, nil, false)
 	if err != nil {
-		s.cleanupReferenceImages(ctx, "", refFiles)
 		return nil, err
 	}
 	// Register so the maintenance sweep can cancel this render if it abandons the
 	// row; deregister on return.
 	s.inflight.Add(eventID, cancel)
 	defer s.inflight.Done(eventID)
-	// Frame / reference images are transient — clean up on success OR failure.
-	defer s.cleanupReferenceImages(ctx, eventID, refFiles)
 	startedAt := time.Now()
 
 	// API-key (noStore) requests return the upstream video URL directly.
@@ -892,26 +883,23 @@ func (s *V1Service) StartVideoJob(ctx context.Context, principal *APIPrincipal, 
 		s.logRejectedEvent(ctx, "video", in.Model, principal, in.Prompt, "v1", err.Error())
 		return nil, err
 	}
-	refFiles := s.saveReferenceImages(ctx, principal, in.ReferenceImages)
 	// Source "v1": no output file is allocated — the result is the upstream URL,
 	// stored on the event when the render completes.
-	eventID, err := s.logPendingEvent(ctx, "video", modelItem, principal, in.Prompt, aspectRatio, resolution, duration, len(in.ReferenceImages), price, "", "v1", refFiles, false)
+	eventID, err := s.logPendingEvent(ctx, "video", modelItem, principal, in.Prompt, aspectRatio, resolution, duration, len(in.ReferenceImages), price, "", "v1", nil, false)
 	if err != nil {
-		s.cleanupReferenceImages(ctx, "", refFiles)
 		return nil, err
 	}
-	go s.runVideoJob(ctx, principal, in, modelItem, eventID, aspectRatio, resolution, duration, price, refFiles)
+	go s.runVideoJob(ctx, principal, in, modelItem, eventID, aspectRatio, resolution, duration, price)
 	return videoJobObject(eventID, modelItem.EffectiveName(), "queued", 0, duration, sizeFromRatioRes(aspectRatio, resolution), time.Now().Unix(), 0, ""), nil
 }
 
 // runVideoJob renders the clip in the background, capturing the upstream URL
 // (downloadResult=false → no bytes, no RustFS) and storing it on the event.
-func (s *V1Service) runVideoJob(ctx context.Context, principal *APIPrincipal, in V1VideoRequest, modelItem *model.ModelConfig, eventID, aspectRatio, resolution, duration string, price float64, refFiles []string) {
+func (s *V1Service) runVideoJob(ctx context.Context, principal *APIPrincipal, in V1VideoRequest, modelItem *model.ModelConfig, eventID, aspectRatio, resolution, duration string, price float64) {
 	genCtx, cancel := context.WithTimeout(ctx, 12*time.Minute)
 	defer cancel()
 	s.inflight.Add(eventID, cancel)
 	defer s.inflight.Done(eventID)
-	defer s.cleanupReferenceImages(ctx, eventID, refFiles)
 	startedAt := time.Now()
 
 	// No-store: capture only the UPSTREAM video URL. /content streams it on demand
@@ -1366,47 +1354,6 @@ func OwnerDir(user *model.User) string {
 		}
 	}
 	return "anon"
-}
-
-// saveReferenceImages persists the user's uploaded reference images under the
-// media root (same tree as outputs, served cookie-authed via /images) so the
-// playground can re-display them after a reload. Best-effort: a save failure
-// just drops that thumbnail and never blocks generation. Returns slash paths.
-func (s *V1Service) saveReferenceImages(ctx context.Context, principal *APIPrincipal, inputs []string) []string {
-	decoded, err := decodeReferenceImages(inputs, len(inputs))
-	if err != nil || len(decoded) == 0 {
-		return nil
-	}
-	userDir := s.userDir(principal)
-	var paths []string
-	for _, data := range decoded {
-		ext := imageExtFromBytes(data)
-		filename := time.Now().Format("20060102-150405") + "-ref-" + randomUpper(6) + "." + ext
-		rel := filepath.ToSlash(filepath.Join(userDir, filename))
-		if err := s.store.Put(ctx, rel, data, contentTypeForExt(ext)); err != nil {
-			continue
-		}
-		paths = append(paths, rel)
-	}
-	return paths
-}
-
-// cleanupReferenceImages deletes a generation's reference images from storage and
-// clears the event's ref_files paths. Called when an attempt finishes — success
-// OR failure — since refs are only needed while generating (no storage bloat, not
-// shown in the admin gallery, no dangling回显 URLs). Best-effort: errors ignored.
-func (s *V1Service) cleanupReferenceImages(ctx context.Context, eventID string, refFiles []string) {
-	if len(refFiles) == 0 {
-		return
-	}
-	for _, rf := range refFiles {
-		if strings.TrimSpace(rf) != "" {
-			_ = s.store.Delete(ctx, rf)
-		}
-	}
-	if strings.TrimSpace(eventID) != "" {
-		_ = s.events.ClearRefFiles(ctx, eventID)
-	}
 }
 
 // contentTypeForExt maps a file extension to a MIME type for storage uploads.
